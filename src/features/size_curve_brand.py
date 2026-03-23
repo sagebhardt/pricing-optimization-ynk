@@ -40,10 +40,123 @@ def _processed_dir(brand: str) -> Path:
     return PROJECT_ROOT / "data" / "processed" / brand.lower()
 
 
+def build_size_availability_from_stock(stock, products):
+    """
+    Track size availability using actual inventory data.
+    A size is available if stock_on_hand > 0.
+    """
+    stock = stock.copy()
+    stock["centro"] = stock["store_id"].str.split("-", n=1).str[0]
+    stock["week"] = stock["fecha"].dt.to_period("W").dt.start_time
+
+    sku_info = products[["material", "codigo_padre", "talla", "primera_jerarquia"]].rename(
+        columns={"material": "sku"}
+    ).drop_duplicates(subset=["sku"])
+
+    stock = stock.merge(sku_info, on="sku", how="inner")
+
+    # Only footwear
+    footwear = stock[stock["primera_jerarquia"] == "Footwear"].copy()
+    if len(footwear) == 0:
+        return pd.DataFrame()
+
+    # End-of-week stock snapshot per SKU-store
+    footwear = footwear.sort_values("fecha")
+    eow = footwear.groupby(["codigo_padre", "centro", "week", "talla"]).last().reset_index()
+    eow["in_stock"] = (eow["stock_on_hand_units"] > 0).astype(int)
+
+    # Total sizes per parent in catalog
+    total_sizes_map = sku_info[sku_info["primera_jerarquia"] == "Footwear"].groupby(
+        "codigo_padre"
+    )["talla"].nunique().to_dict()
+
+    # All sizes ever in stock for each parent-store
+    ever_in_stock = (
+        eow[eow["in_stock"] == 1]
+        .groupby(["codigo_padre", "centro"])["talla"]
+        .apply(set)
+        .to_dict()
+    )
+
+    # Peak sizes per parent-store (max sizes in stock in any week, trailing 12w)
+    sizes_per_week = (
+        eow[eow["in_stock"] == 1]
+        .groupby(["codigo_padre", "centro", "week"])["talla"]
+        .nunique()
+        .rename("n_sizes_in_stock")
+        .reset_index()
+    )
+
+    results = []
+    for (parent, store), grp in eow.groupby(["codigo_padre", "centro"]):
+        all_sizes = ever_in_stock.get((parent, store), set())
+        total_sizes = total_sizes_map.get(parent, len(all_sizes))
+        core_sizes_available_total = all_sizes & CORE_SIZES
+        n_core_total = len(core_sizes_available_total)
+
+        spw = sizes_per_week[
+            (sizes_per_week["codigo_padre"] == parent) & (sizes_per_week["centro"] == store)
+        ].set_index("week")["n_sizes_in_stock"]
+
+        for week, wk_data in grp.groupby("week"):
+            active_sizes = set(wk_data[wk_data["in_stock"] == 1]["talla"])
+            n_active = len(active_sizes)
+            lost_sizes = all_sizes - active_sizes
+            n_lost = len(lost_sizes)
+
+            core_active = active_sizes & CORE_SIZES
+            n_core_active = len(core_active)
+            n_core_lost = len(core_sizes_available_total - core_active)
+
+            # Peak sizes in trailing 12 weeks
+            window_start = week - pd.Timedelta(weeks=12)
+            peak_sizes = spw.loc[
+                (spw.index >= window_start) & (spw.index <= week)
+            ].max() if len(spw) > 0 else n_active
+            peak_sizes = max(peak_sizes, 1) if pd.notna(peak_sizes) else max(n_active, 1)
+
+            attrition_rate = 1 - (n_active / peak_sizes)
+
+            # Fragmentation
+            numeric_sizes = []
+            for s in active_sizes:
+                try:
+                    numeric_sizes.append(float(str(s).replace(",", ".")))
+                except (ValueError, AttributeError):
+                    pass
+            if len(numeric_sizes) > 1:
+                numeric_sizes.sort()
+                gaps = [numeric_sizes[k+1] - numeric_sizes[k] for k in range(len(numeric_sizes)-1)]
+                fragmentation = np.std(gaps) / max(np.mean(gaps), 0.01)
+            else:
+                fragmentation = 0
+
+            results.append({
+                "codigo_padre": parent,
+                "centro": store,
+                "week": week,
+                "total_sizes_ever": total_sizes,
+                "active_sizes_4w": n_active,
+                "lost_sizes": n_lost,
+                "size_completeness": n_active / max(total_sizes, 1),
+                "peak_sizes": int(peak_sizes),
+                "attrition_rate": attrition_rate,
+                "core_sizes_total": n_core_total,
+                "core_sizes_active": n_core_active,
+                "core_sizes_lost": n_core_lost,
+                "core_completeness": n_core_active / max(n_core_total, 1),
+                "fragmentation_index": fragmentation,
+                "source": "stock",
+            })
+
+    return pd.DataFrame(results)
+
+
 def build_size_availability(txn, products):
     """
     Track which sizes are 'available' per parent SKU-store-week.
-    Proxy: a size is available if it sold in the trailing 4-week window.
+    Fallback proxy: a size is available if it sold in the trailing 4-week window.
+    Used when actual stock data is not available.
     """
     sales = txn[txn["cantidad"] > 0].copy()
     sales["week"] = sales["fecha"].dt.to_period("W").dt.start_time
@@ -145,6 +258,7 @@ def build_size_availability(txn, products):
                 "core_sizes_lost": n_core_lost,
                 "core_completeness": n_core_active / max(n_core_total, 1),
                 "fragmentation_index": fragmentation,
+                "source": "sales_proxy",
             })
 
     return pd.DataFrame(results)
@@ -206,8 +320,18 @@ def run_size_curve_for_brand(brand: str):
     txn = pd.read_parquet(raw / "transactions.parquet")
     products = pd.read_parquet(raw / "products.parquet")
 
-    print(f"[{brand}] Building size availability tracking...")
-    size_df = build_size_availability(txn, products)
+    # Use actual stock data when available, fall back to sales proxy
+    stock_path = raw / "stock.parquet"
+    if stock_path.exists():
+        print(f"[{brand}] Building size availability from STOCK DATA...")
+        stock = pd.read_parquet(stock_path)
+        size_df = build_size_availability_from_stock(stock, products)
+        if len(size_df) == 0:
+            print(f"  Stock data didn't match footwear — falling back to sales proxy")
+            size_df = build_size_availability(txn, products)
+    else:
+        print(f"[{brand}] Building size availability from sales proxy (no stock data)...")
+        size_df = build_size_availability(txn, products)
     size_df.to_parquet(processed / "size_curve_tracking.parquet", index=False)
 
     print(f"  {len(size_df):,} parent-store-week rows")

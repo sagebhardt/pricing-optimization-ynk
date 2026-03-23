@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import pandas as pd
 import psycopg2
 from pathlib import Path
-from config.database import DB_CONFIG, BRANDS, EXCLUDE_SKUS
+from config.database import DB_CONFIG, BRANDS, EXCLUDE_SKUS, STOCK_TABLES
 
 
 def get_connection():
@@ -111,7 +111,20 @@ def extract_brand(brand_name: str):
     mkdown.to_parquet(raw_dir / "mkdown_contribution_2024.parquet", index=False)
     print(f"  {len(mkdown):,} records")
 
-    # 6. Calendar (shared)
+    # 6. Stock / inventory
+    stock = pd.DataFrame()
+    stock_table = STOCK_TABLES.get(brand_name)
+    if stock_table:
+        print(f"Extracting stock from {stock_table}...")
+        stock = pd.read_sql(f"SELECT * FROM {stock_table}", conn)
+        stock["fecha"] = pd.to_datetime(stock["fecha"])
+        stock.to_parquet(raw_dir / "stock.parquet", index=False)
+        print(f"  {len(stock):,} stock records")
+        print(f"  Date range: {stock['fecha'].min().date()} to {stock['fecha'].max().date()}")
+    else:
+        print(f"No stock table configured for {brand_name} — skipping")
+
+    # 7. Calendar (shared)
     cal_path = Path(__file__).parent.parent.parent / "data" / "raw" / "calendar.parquet"
     if not cal_path.exists():
         print("Extracting calendar...")
@@ -127,8 +140,9 @@ def extract_brand(brand_name: str):
     print(f"  Products:     {len(products):,}")
     print(f"  Stores:       {len(stores)}")
     print(f"  Foot traffic: {len(traffic):,}")
+    print(f"  Stock:        {len(stock):,}")
 
-    return {"transactions": txn, "products": products, "stores": stores, "traffic": traffic}
+    return {"transactions": txn, "products": products, "stores": stores, "traffic": traffic, "stock": stock}
 
 
 if __name__ == "__main__":

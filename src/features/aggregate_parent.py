@@ -140,6 +140,49 @@ def aggregate_to_parent(brand: str):
         .reset_index()
     )
 
+    # Stock features (conditional — only if stock data was available)
+    stock_cols = ["stock_on_hand", "stock_in_transit", "stock_total",
+                  "weeks_of_cover", "stock_out_days", "stock_to_sales_ratio"]
+    has_stock = all(c in child.columns for c in stock_cols[:3])
+    if has_stock:
+        print(f"[{brand}] Aggregating stock features to parent level...")
+        stock_parent = (
+            child.groupby(["codigo_padre", "centro", "week"])
+            .agg(
+                stock_on_hand=("stock_on_hand", "sum"),
+                stock_in_transit=("stock_in_transit", "sum"),
+                stock_total=("stock_total", "sum"),
+                stock_out_days=("stock_out_days", "max"),  # worst case across sizes
+                _sizes_with_stock=("stock_on_hand", lambda x: (x > 0).sum()),
+                _sizes_total_stock=("stock_on_hand", "count"),
+            )
+            .reset_index()
+        )
+        stock_parent["pct_sizes_in_stock"] = (
+            stock_parent["_sizes_with_stock"] / stock_parent["_sizes_total_stock"].clip(lower=1)
+        ).clip(upper=1.0)
+        stock_parent.drop(columns=["_sizes_with_stock", "_sizes_total_stock"], inplace=True)
+        parent = parent.merge(stock_parent, on=["codigo_padre", "centro", "week"], how="left")
+
+        # Recompute weeks_of_cover at parent level
+        parent["weeks_of_cover"] = np.where(
+            parent["velocity_4w"] > 0,
+            parent["stock_on_hand"] / parent["velocity_4w"],
+            np.where(parent["stock_on_hand"] > 0, 52.0, 0.0),
+        )
+        parent["weeks_of_cover"] = parent["weeks_of_cover"].clip(upper=52.0)
+
+        # Stock-to-sales at parent level
+        parent["stock_to_sales_ratio"] = np.where(
+            parent["units_sold"] > 0,
+            parent["stock_on_hand"] / parent["units_sold"],
+            np.where(parent["stock_on_hand"] > 0, 99.0, 0.0),
+        )
+        parent["stock_to_sales_ratio"] = parent["stock_to_sales_ratio"].clip(upper=99.0)
+
+        stock_matched = parent["stock_on_hand"].notna().sum()
+        print(f"  Stock coverage: {stock_matched:,} / {len(parent):,} rows ({stock_matched/len(parent):.1%})")
+
     # Recompute velocity trend at parent level
     parent["velocity_trend"] = np.where(
         parent["velocity_4w"] > 0,

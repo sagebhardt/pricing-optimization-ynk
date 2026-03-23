@@ -181,6 +181,25 @@ def classify_urgency(row):
         reasons.append(f"Product is {int(age)} weeks old")
         urgency_score += 1
 
+    # Inventory pressure (when stock data available)
+    woc = row.get("weeks_of_cover")
+    stock_on_hand = row.get("stock_on_hand")
+    if pd.notna(woc) and pd.notna(stock_on_hand) and stock_on_hand > 0:
+        if woc > 20 and vel_trend <= 1.0:
+            reasons.append(f"Overstocked ({woc:.0f} weeks of cover)")
+            urgency_score += 3
+        elif woc > 12 and vel_trend < 0.8:
+            reasons.append(f"High stock ({woc:.0f} WoC) + slowing sales")
+            urgency_score += 2
+        elif woc > 8:
+            reasons.append(f"Elevated stock ({woc:.0f} WoC)")
+            urgency_score += 1
+
+    pct_sizes = row.get("pct_sizes_in_stock")
+    if pd.notna(pct_sizes) and pct_sizes < 0.4 and pd.notna(stock_on_hand) and stock_on_hand > 0:
+        reasons.append(f"Broken size run ({pct_sizes:.0%} sizes in stock)")
+        urgency_score += 2
+
     # Already discounted elsewhere (price consistency)
     if row.get("max_discount_rate", 0) > 0.1 and row.get("discount_rate", 0) < 0.05:
         reasons.append("Discounted in other channels")
@@ -403,12 +422,17 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         attrition = attrition if pd.notna(attrition) else 0
         age = row.get("product_age_weeks", 0)
 
+        # Don't increase price if overstocked (WoC > 15)
+        woc = row.get("weeks_of_cover")
+        overstocked = pd.notna(woc) and woc > 15
+
         should_increase = (
             velocity >= 1.0
             and vel_trend >= 1.0
             and lifecycle not in (4, 5)
             and attrition < 0.3
             and age < 35
+            and not overstocked
         )
         if not should_increase:
             continue
@@ -436,6 +460,10 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         if n_sell >= n_total * 0.7:
             reasons.append(f"Size curve healthy ({n_sell}/{n_total})")
 
+        # Stock info (if available)
+        _stock = int(row["stock_on_hand"]) if pd.notna(row.get("stock_on_hand")) else None
+        _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
+
         parent_actions.append({
             "parent_sku": row["codigo_padre"],
             "store": row["centro"],
@@ -446,6 +474,8 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "sizes_selling": n_sell,
             "sizes_total": n_total,
             "product_age_weeks": int(age),
+            "stock_on_hand": _stock,
+            "weeks_of_cover": _woc,
             "current_list_price": int(list_price),
             "current_price": current_final_rounded,
             "current_discount": f"{current_step:.0%}",
@@ -517,6 +547,10 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         n_sell = int(row["sizes_selling"])
         n_total = int(row["total_sizes_catalog"])
 
+        # Stock info (if available)
+        _stock = int(row["stock_on_hand"]) if pd.notna(row.get("stock_on_hand")) else None
+        _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
+
         parent_actions.append({
             "parent_sku": parent,
             "store": store,
@@ -527,6 +561,8 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "sizes_selling": n_sell,
             "sizes_total": n_total,
             "product_age_weeks": int(age),
+            "stock_on_hand": _stock,
+            "weeks_of_cover": _woc,
             "current_list_price": int(list_price),
             "current_price": current_final_rounded,
             "current_discount": f"{current_step:.0%}",

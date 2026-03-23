@@ -66,6 +66,11 @@ BRANDS = {
     },
 }
 
+# Stock table locations (team uploads may land in different schemas/tables)
+STOCK_TABLES = {
+    "HOKA": "public.stock_hoka",
+}
+
 # Backwards compatibility
 HOKA_STORES = BRANDS["HOKA"]["stores_active"]
 HOKA_STORES_ALL = BRANDS["HOKA"]["stores_all"]

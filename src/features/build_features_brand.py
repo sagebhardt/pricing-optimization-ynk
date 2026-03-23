@@ -47,7 +47,10 @@ def load_raw_data(brand: str):
     if not cal_path.exists():
         cal_path = PROJECT_ROOT / "data" / "raw" / "calendar.parquet"
     calendar = pd.read_parquet(cal_path)
-    return txn, products, stores, traffic, calendar
+    # Stock (optional — only available for brands where planning uploaded it)
+    stock_path = raw / "stock.parquet"
+    stock = pd.read_parquet(stock_path) if stock_path.exists() else None
+    return txn, products, stores, traffic, calendar, stock
 
 
 def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
@@ -236,6 +239,66 @@ def add_seasonality_features(weekly: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
+def add_stock_features(weekly: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFrame:
+    """Add inventory-based features from daily stock snapshots.
+
+    Features added:
+    - stock_on_hand: end-of-week stock units
+    - stock_in_transit: end-of-week in-transit units
+    - stock_total: on-hand + in-transit
+    - weeks_of_cover: stock_on_hand / velocity_4w (how many weeks until stockout)
+    - stock_out_days: number of days during the week with zero stock
+    - stock_to_sales_ratio: stock_on_hand / units_sold (inventory efficiency)
+    """
+    stock = stock.copy()
+
+    # Map store_id ("7501-Hoka Costanera") to centro ("7501")
+    stock["centro"] = stock["store_id"].str.split("-", n=1).str[0]
+    stock["week"] = stock["fecha"].dt.to_period("W").dt.start_time
+
+    # End-of-week snapshot (last day of each week per SKU-store)
+    stock_sorted = stock.sort_values(["sku", "centro", "fecha"])
+    eow = stock_sorted.groupby(["sku", "centro", "week"]).last().reset_index()
+
+    # Days with zero stock per week
+    stock["is_stockout"] = (stock["stock_on_hand_units"] == 0).astype(int)
+    stockout_days = (
+        stock.groupby(["sku", "centro", "week"])["is_stockout"]
+        .sum()
+        .rename("stock_out_days")
+        .reset_index()
+    )
+
+    stock_weekly = eow[["sku", "centro", "week",
+                         "stock_on_hand_units", "stock_in_transit_units",
+                         "total_stock_position_units"]].rename(columns={
+        "stock_on_hand_units": "stock_on_hand",
+        "stock_in_transit_units": "stock_in_transit",
+        "total_stock_position_units": "stock_total",
+    })
+    stock_weekly = stock_weekly.merge(stockout_days, on=["sku", "centro", "week"], how="left")
+
+    weekly = weekly.merge(stock_weekly, on=["sku", "centro", "week"], how="left")
+
+    # Weeks of cover: how many weeks of stock left at current sell rate
+    weekly["weeks_of_cover"] = np.where(
+        weekly["velocity_4w"] > 0,
+        weekly["stock_on_hand"] / weekly["velocity_4w"],
+        np.where(weekly["stock_on_hand"] > 0, 52.0, 0.0),  # cap at 52 if no sales
+    )
+    weekly["weeks_of_cover"] = weekly["weeks_of_cover"].clip(upper=52.0)
+
+    # Stock-to-sales ratio
+    weekly["stock_to_sales_ratio"] = np.where(
+        weekly["units_sold"] > 0,
+        weekly["stock_on_hand"] / weekly["units_sold"],
+        np.where(weekly["stock_on_hand"] > 0, 99.0, 0.0),
+    )
+    weekly["stock_to_sales_ratio"] = weekly["stock_to_sales_ratio"].clip(upper=99.0)
+
+    return weekly
+
+
 def add_foot_traffic_features(weekly: pd.DataFrame, traffic: pd.DataFrame) -> pd.DataFrame:
     """Add store-level foot traffic and conversion features."""
     traffic = traffic.copy()
@@ -290,14 +353,13 @@ def add_product_attributes(weekly: pd.DataFrame, products: pd.DataFrame) -> pd.D
 
 def build_target_variable(weekly: pd.DataFrame) -> pd.DataFrame:
     """
-    Build proxy target variable for markdown optimization.
+    Build target variables for markdown optimization.
 
-    Without inventory data, we use a revenue-based proxy:
-    - For each SKU-store, identify markdown events (discount_rate > threshold)
-    - Target = was this SKU marked down within the next N weeks?
-    - Secondary target = discount depth applied
-
-    This will be replaced with margin-based targets once cost data is available.
+    Targets:
+    - will_discount_4w: binary — was this SKU marked down within the next 4 weeks?
+    - future_max_disc_4w: continuous — max discount depth in next 4 weeks
+    - velocity_lift: ratio — did the markdown accelerate sales?
+    - needs_markdown: binary (when stock available) — low WoC + declining velocity
     """
     weekly = weekly.sort_values(["sku", "centro", "week"]).reset_index(drop=True)
     gb = weekly.groupby(["sku", "centro"], sort=False)
@@ -359,7 +421,7 @@ def build_features_for_brand(brand: str):
     processed.mkdir(parents=True, exist_ok=True)
 
     print(f"[{brand}] Loading raw data...")
-    txn, products, stores, traffic, calendar = load_raw_data(brand)
+    txn, products, stores, traffic, calendar, stock = load_raw_data(brand)
 
     print(f"[{brand}] Building weekly sales aggregation...")
     weekly = build_weekly_sales(txn)
@@ -379,6 +441,16 @@ def build_features_for_brand(brand: str):
 
     print(f"[{brand}] Adding seasonality features...")
     weekly = add_seasonality_features(weekly)
+
+    if stock is not None:
+        print(f"[{brand}] Adding stock/inventory features...")
+        weekly = add_stock_features(weekly, stock)
+        stock_cols = ["stock_on_hand", "stock_in_transit", "stock_total",
+                      "weeks_of_cover", "stock_out_days", "stock_to_sales_ratio"]
+        matched = weekly[stock_cols[0]].notna().sum()
+        print(f"  Stock matched: {matched:,} / {len(weekly):,} rows ({matched/len(weekly):.1%})")
+    else:
+        print(f"[{brand}] No stock data available — skipping inventory features")
 
     print(f"[{brand}] Adding foot traffic features...")
     weekly = add_foot_traffic_features(weekly, traffic)

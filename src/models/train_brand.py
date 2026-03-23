@@ -267,7 +267,7 @@ def train_brand_models(brand: str):
         },
         "brand": brand,
         "version": "v2",
-        "note": "Enhanced with price elasticity, lifecycle stages, size curve, derived seasons.",
+        "note": "Enhanced with price elasticity, lifecycle stages, size curve, derived seasons, inventory/stock features.",
     }
     with open(model_dir / "training_metadata.json", "w") as f:
         json.dump(meta, f, indent=2, default=str)
