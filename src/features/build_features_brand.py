@@ -299,6 +299,42 @@ def add_stock_features(weekly: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFram
     return weekly
 
 
+def add_size_sales_share(weekly: pd.DataFrame, txn: pd.DataFrame, products: pd.DataFrame) -> pd.DataFrame:
+    """Add each child SKU's historical volume share within its parent.
+
+    This enables volume-weighted size availability at parent level during aggregation.
+    A child that accounts for 20% of parent sales matters 10x more than one at 2%.
+    """
+    sku_parent = products[["material", "codigo_padre"]].rename(
+        columns={"material": "sku"}
+    ).drop_duplicates("sku")
+
+    # All-time sales per child SKU
+    sales = txn[txn["cantidad"] > 0].groupby("sku")["cantidad"].sum().rename("sku_total_units")
+    sales = sales.reset_index().merge(sku_parent, on="sku", how="left")
+
+    # Parent total
+    parent_total = sales.groupby("codigo_padre")["sku_total_units"].transform("sum")
+    sales["size_sales_share"] = sales["sku_total_units"] / parent_total.clip(lower=1)
+
+    # Rank within parent (1 = best seller)
+    sales["size_rank"] = sales.groupby("codigo_padre")["sku_total_units"].rank(
+        ascending=False, method="min"
+    ).astype(int)
+
+    weekly = weekly.merge(
+        sales[["sku", "size_sales_share", "size_rank"]],
+        on="sku", how="left",
+    )
+    weekly["size_sales_share"] = weekly["size_sales_share"].fillna(0)
+    weekly["size_rank"] = weekly["size_rank"].fillna(99).astype(int)
+
+    top3_pct = (weekly["size_rank"] <= 3).mean()
+    print(f"  Top-3 sizes: {top3_pct:.1%} of child rows, avg share: {weekly.loc[weekly['size_rank'] <= 3, 'size_sales_share'].mean():.1%}")
+
+    return weekly
+
+
 def add_foot_traffic_features(weekly: pd.DataFrame, traffic: pd.DataFrame) -> pd.DataFrame:
     """Add store-level foot traffic and conversion features."""
     traffic = traffic.copy()
@@ -449,6 +485,9 @@ def build_features_for_brand(brand: str):
                       "weeks_of_cover", "stock_out_days", "stock_to_sales_ratio"]
         matched = weekly[stock_cols[0]].notna().sum()
         print(f"  Stock matched: {matched:,} / {len(weekly):,} rows ({matched/len(weekly):.1%})")
+
+        print(f"[{brand}] Adding size sales share (volume weight per child SKU)...")
+        weekly = add_size_sales_share(weekly, txn, products)
     else:
         print(f"[{brand}] No stock data available — skipping inventory features")
 

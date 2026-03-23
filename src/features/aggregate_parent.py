@@ -25,6 +25,95 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
+def _compute_weighted_size_features(brand_lower: str, raw: Path):
+    """Compute volume-weighted size availability from raw stock + sales data.
+
+    Unlike pct_sizes_in_stock (which treats all sizes equally), this weights
+    each size by its historical sales share within the parent. Being out of
+    stock on your #1 seller (20% of volume) hurts far more than losing a tail
+    size (1% of volume).
+
+    Features:
+    - weighted_size_avail: 0–1, volume-weighted fraction of sizes in stock
+    - top3_sizes_in_stock: fraction of top 3 selling sizes with stock > 0
+    - revenue_at_risk_pct: volume share of sizes currently out of stock
+    """
+    stock_path = raw / "stock.parquet"
+    txn_path = raw / "transactions.parquet"
+    products_path = raw / "products.parquet"
+
+    if not stock_path.exists():
+        return None
+
+    stock = pd.read_parquet(stock_path)
+    txn = pd.read_parquet(txn_path)
+    products = pd.read_parquet(products_path)
+
+    sku_parent = products[["material", "codigo_padre"]].rename(
+        columns={"material": "sku"}
+    ).drop_duplicates("sku")
+
+    # 1. Historical sales share per child SKU within parent
+    sales_by_sku = (
+        txn[txn["cantidad"] > 0]
+        .groupby("sku")["cantidad"].sum()
+        .rename("sku_units")
+        .reset_index()
+        .merge(sku_parent, on="sku", how="left")
+    )
+    parent_total = sales_by_sku.groupby("codigo_padre")["sku_units"].transform("sum")
+    sales_by_sku["share"] = sales_by_sku["sku_units"] / parent_total.clip(lower=1)
+    sales_by_sku["size_rank"] = sales_by_sku.groupby("codigo_padre")["sku_units"].rank(
+        ascending=False, method="min"
+    )
+
+    share_map = sales_by_sku.set_index("sku")[["share", "size_rank", "codigo_padre"]]
+
+    # 2. End-of-week stock per child SKU
+    stock = stock.copy()
+    stock["centro"] = stock["store_id"].str.split("-", n=1).str[0]
+    stock["week"] = stock["fecha"].dt.to_period("W").dt.start_time
+    stock_sorted = stock.sort_values("fecha")
+    eow = stock_sorted.groupby(["sku", "centro", "week"]).last().reset_index()
+    eow["has_stock"] = (eow["stock_on_hand_units"] > 0).astype(int)
+
+    # Merge sales share onto stock
+    eow = eow.merge(share_map, on="sku", how="left")
+    eow["share"] = eow["share"].fillna(0)
+    # If codigo_padre didn't come from share_map, get it from products
+    missing_parent = eow["codigo_padre"].isna()
+    if missing_parent.any():
+        eow_fix = eow.loc[missing_parent, ["sku"]].merge(sku_parent, on="sku", how="left")
+        eow.loc[missing_parent, "codigo_padre"] = eow_fix["codigo_padre"].values
+
+    eow = eow.dropna(subset=["codigo_padre"])
+
+    # 3. Vectorized weighted metrics per parent-store-week
+    eow["share_x_stock"] = eow["share"] * eow["has_stock"]
+    eow["share_x_nostock"] = eow["share"] * (1 - eow["has_stock"])
+
+    grouped = eow.groupby(["codigo_padre", "centro", "week"]).agg(
+        _share_in_stock=("share_x_stock", "sum"),
+        _share_total=("share", "sum"),
+        _share_out_of_stock=("share_x_nostock", "sum"),
+    )
+    grouped["weighted_size_avail"] = (
+        grouped["_share_in_stock"] / grouped["_share_total"].clip(lower=0.001)
+    ).clip(upper=1.0)
+    grouped["revenue_at_risk_pct"] = grouped["_share_out_of_stock"].clip(lower=0.0)
+
+    # Top 3 selling sizes availability
+    top3 = eow[eow["size_rank"] <= 3]
+    top3_avail = (
+        top3.groupby(["codigo_padre", "centro", "week"])["has_stock"]
+        .mean()
+        .rename("top3_sizes_in_stock")
+    )
+
+    result = grouped[["weighted_size_avail", "revenue_at_risk_pct"]].join(top3_avail).reset_index()
+    return result
+
+
 def aggregate_to_parent(brand: str):
     """Aggregate child-level features to parent-store-week."""
     brand_lower = brand.lower()
@@ -180,6 +269,17 @@ def aggregate_to_parent(brand: str):
 
         stock_matched = parent["stock_on_hand"].notna().sum()
         print(f"  Stock coverage: {stock_matched:,} / {len(parent):,} rows ({stock_matched/len(parent):.1%})")
+
+        # Volume-weighted size availability
+        # Computed from raw stock data so we see ALL sizes (not just those with sales this week)
+        print(f"[{brand}] Computing volume-weighted size availability...")
+        weighted_feats = _compute_weighted_size_features(brand_lower, raw)
+        if weighted_feats is not None and len(weighted_feats) > 0:
+            parent = parent.merge(weighted_feats, on=["codigo_padre", "centro", "week"], how="left")
+            matched = parent["weighted_size_avail"].notna().sum()
+            print(f"  Weighted size features matched: {matched:,} / {len(parent):,} rows")
+        else:
+            print(f"  (could not compute weighted size features)")
 
     # Recompute velocity trend at parent level
     parent["velocity_trend"] = np.where(

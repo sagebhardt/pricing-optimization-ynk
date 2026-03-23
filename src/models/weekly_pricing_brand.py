@@ -195,9 +195,30 @@ def classify_urgency(row):
             reasons.append(f"Elevated stock ({woc:.0f} WoC)")
             urgency_score += 1
 
-    pct_sizes = row.get("pct_sizes_in_stock")
-    if pd.notna(pct_sizes) and pct_sizes < 0.4 and pd.notna(stock_on_hand) and stock_on_hand > 0:
-        reasons.append(f"Broken size run ({pct_sizes:.0%} sizes in stock)")
+    # Volume-weighted size availability (best sellers out of stock = critical)
+    weighted_avail = row.get("weighted_size_avail")
+    top3_in_stock = row.get("top3_sizes_in_stock")
+    rev_at_risk = row.get("revenue_at_risk_pct")
+
+    if pd.notna(weighted_avail) and pd.notna(stock_on_hand) and stock_on_hand > 0:
+        if weighted_avail < 0.3:
+            reasons.append(f"Best sellers out of stock ({weighted_avail:.0%} vol-weighted avail)")
+            urgency_score += 3
+        elif weighted_avail < 0.5:
+            reasons.append(f"Key sizes depleting ({weighted_avail:.0%} vol-weighted avail)")
+            urgency_score += 2
+        elif weighted_avail < 0.7:
+            reasons.append(f"Size run weakening ({weighted_avail:.0%} vol-weighted avail)")
+            urgency_score += 1
+    elif pd.notna(row.get("pct_sizes_in_stock")):
+        # Fallback to unweighted if weighted not available
+        pct_sizes = row.get("pct_sizes_in_stock")
+        if pct_sizes < 0.4 and pd.notna(stock_on_hand) and stock_on_hand > 0:
+            reasons.append(f"Broken size run ({pct_sizes:.0%} sizes in stock)")
+            urgency_score += 2
+
+    if pd.notna(top3_in_stock) and top3_in_stock < 0.5:
+        reasons.append(f"Top sellers stockout ({top3_in_stock:.0%} of top 3 in stock)")
         urgency_score += 2
 
     # Already discounted elsewhere (price consistency)
