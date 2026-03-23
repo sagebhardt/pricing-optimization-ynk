@@ -189,10 +189,10 @@ function LandingPage({ onEnter }) {
 
           <div className="lcard lcard--next">
             <div className="lcard-label">Proximos pasos</div>
-            <h2 className="lcard-title">Datos pendientes con Jacques / equipo SAP</h2>
+            <h2 className="lcard-title">Datos pendientes con el equipo de Planning</h2>
             <p className="lcard-body">
               Hay tres fuentes de datos que mejorarian materialmente la precision del sistema.
-              Cada una esta bloqueada esperando extraccion desde SAP.
+              Cada una esta bloqueada esperando extraccion desde el equipo de Planning.
             </p>
             <div className="lnext-list">
               <div className="lnext-item">
