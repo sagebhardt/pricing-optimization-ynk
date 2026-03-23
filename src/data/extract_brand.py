@@ -116,11 +116,17 @@ def extract_brand(brand_name: str):
     stock_table = STOCK_TABLES.get(brand_name)
     if stock_table:
         print(f"Extracting stock from {stock_table}...")
+        # Pull full table (faster than WHERE IN on large tables) and filter in-memory
         stock = pd.read_sql(f"SELECT * FROM {stock_table}", conn)
+        n_raw = len(stock)
+        if len(brand_skus) > 0:
+            stock = stock[stock["sku"].isin(brand_skus)]
         stock["fecha"] = pd.to_datetime(stock["fecha"])
         stock.to_parquet(raw_dir / "stock.parquet", index=False)
-        print(f"  {len(stock):,} stock records")
-        print(f"  Date range: {stock['fecha'].min().date()} to {stock['fecha'].max().date()}")
+        print(f"  {len(stock):,} stock records (from {n_raw:,} raw)")
+        if len(stock) > 0:
+            print(f"  Date range: {stock['fecha'].min().date()} to {stock['fecha'].max().date()}")
+            print(f"  Stores: {stock['store_id'].nunique()}")
     else:
         print(f"No stock table configured for {brand_name} — skipping")
 

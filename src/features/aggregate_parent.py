@@ -146,18 +146,16 @@ def aggregate_to_parent(brand: str):
     has_stock = all(c in child.columns for c in stock_cols[:3])
     if has_stock:
         print(f"[{brand}] Aggregating stock features to parent level...")
-        stock_parent = (
-            child.groupby(["codigo_padre", "centro", "week"])
-            .agg(
-                stock_on_hand=("stock_on_hand", "sum"),
-                stock_in_transit=("stock_in_transit", "sum"),
-                stock_total=("stock_total", "sum"),
-                stock_out_days=("stock_out_days", "max"),  # worst case across sizes
-                _sizes_with_stock=("stock_on_hand", lambda x: (x > 0).sum()),
-                _sizes_total_stock=("stock_on_hand", "count"),
-            )
-            .reset_index()
+        # Use named agg for sum cols with min_count=1 so all-NaN groups stay NaN
+        # (pre-stock-data rows should be null, not zero)
+        grouped = child.groupby(["codigo_padre", "centro", "week"])
+        stock_sums = grouped[["stock_on_hand", "stock_in_transit", "stock_total"]].sum(min_count=1)
+        stock_other = grouped.agg(
+            stock_out_days=("stock_out_days", "max"),
+            _sizes_with_stock=("stock_on_hand", lambda x: (x > 0).sum() if x.notna().any() else np.nan),
+            _sizes_total_stock=("stock_on_hand", lambda x: x.notna().sum()),
         )
+        stock_parent = stock_sums.join(stock_other).reset_index()
         stock_parent["pct_sizes_in_stock"] = (
             stock_parent["_sizes_with_stock"] / stock_parent["_sizes_total_stock"].clip(lower=1)
         ).clip(upper=1.0)

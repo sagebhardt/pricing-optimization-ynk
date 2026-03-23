@@ -69,6 +69,9 @@ BRANDS = {
 # Stock table locations (team uploads may land in different schemas/tables)
 STOCK_TABLES = {
     "HOKA": "public.stock_hoka",
+    "BOLD": "public.stock_bold",
+    "BAMERS": "public.stock_bamers",
+    "OAKLEY": "public.stock_oakley",
 }
 
 # Backwards compatibility
