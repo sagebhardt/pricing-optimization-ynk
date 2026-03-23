@@ -1,0 +1,16 @@
+data/raw/
+data/processed/
+*.pyc
+__pycache__/
+.env
+*.pkl
+*.joblib
+.DS_Store
+notebooks/.ipynb_checkpoints/
+node_modules/
+dashboard/src/assets/hero.png
+dashboard/src/assets/react.svg
+dashboard/src/assets/vite.svg
+api/static/
+*.parquet
+yaneken-pricing-markdown-optimization-brief.docx

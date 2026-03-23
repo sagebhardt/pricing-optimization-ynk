@@ -1,0 +1,11 @@
+.git
+.gitignore
+node_modules/
+dashboard/node_modules/
+dashboard/src/
+notebooks/
+*.docx
+__pycache__/
+*.pyc
+.env
+.claude/
