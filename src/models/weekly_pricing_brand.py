@@ -30,6 +30,7 @@ import pickle
 import json
 from pathlib import Path
 from datetime import datetime
+from config.database import BRANDS, EXCLUDE_STORES_PRICING
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -65,20 +66,19 @@ def _load_store_names(brand: str) -> dict:
     raw = _raw_dir(brand)
     try:
         stores = pd.read_parquet(raw / "stores.parquet")
-        # Try common column patterns for store code -> name mapping
-        if "centro" in stores.columns and "nombre" in stores.columns:
+        if "centro" in stores.columns and "sucursal" in stores.columns:
+            # sucursal format: "B050-Bamers Curico II" -> extract name after the dash
+            mapping = {}
+            for _, row in stores.iterrows():
+                code = row["centro"]
+                suc = str(row["sucursal"])
+                name = suc.split("-", 1)[1].strip() if "-" in suc else suc
+                mapping[code] = name
+            return mapping
+        elif "centro" in stores.columns and "nombre" in stores.columns:
             return stores.set_index("centro")["nombre"].to_dict()
-        elif "centro" in stores.columns and "nombre_tienda" in stores.columns:
-            return stores.set_index("centro")["nombre_tienda"].to_dict()
-        elif "store_code" in stores.columns and "store_name" in stores.columns:
-            return stores.set_index("store_code")["store_name"].to_dict()
         else:
-            # Fallback: use first two columns as code/name
-            cols = stores.columns.tolist()
-            if len(cols) >= 2:
-                return stores.set_index(cols[0])[cols[1]].to_dict()
-            else:
-                return {}
+            return {}
     except (FileNotFoundError, KeyError):
         return {}
 
@@ -251,9 +251,15 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
     except FileNotFoundError:
         elast_map = {}
 
-    # Determine target week
+    # Determine target week — use most recent week with sufficient data
     if target_week is None:
-        target_week = features["week"].max()
+        # Count rows per week, pick latest with >= 10 parent-store rows
+        week_counts = features.groupby("week").size()
+        viable_weeks = week_counts[week_counts >= 10].index
+        if len(viable_weeks) > 0:
+            target_week = viable_weeks.max()
+        else:
+            target_week = features["week"].max()
     else:
         target_week = pd.Timestamp(target_week)
 
@@ -264,6 +270,23 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
     if len(week_data) == 0:
         print(f"  No data for {target_week.date()}")
         return None
+
+    # Filter out non-retail stores (logistics, digital, internal)
+    store_col = "centro" if "centro" in week_data.columns else None
+    if store_col:
+        excluded = [s for s in EXCLUDE_STORES_PRICING if week_data[store_col].str.contains(s, na=False).any()]
+        if excluded:
+            n_before = len(week_data)
+            week_data = week_data[~week_data[store_col].str.startswith(tuple(EXCLUDE_STORES_PRICING))]
+            print(f"  Filtered {n_before - len(week_data)} rows from non-retail stores: {excluded}")
+
+        # Also filter to active stores if configured
+        brand_cfg = BRANDS.get(brand.upper(), {})
+        active_stores = brand_cfg.get("stores_active")
+        if active_stores:
+            n_before = len(week_data)
+            week_data = week_data[week_data[store_col].isin(active_stores)]
+            print(f"  Filtered to {len(week_data)} rows across {len(active_stores)} active stores (from {n_before})")
 
     # Score at whatever level the features are (parent or child)
     df_prep = week_data.copy()

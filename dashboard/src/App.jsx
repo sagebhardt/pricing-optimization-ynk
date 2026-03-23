@@ -1,10 +1,19 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, RotateCcw } from 'lucide-react'
+import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter } from 'lucide-react'
 import './App.css'
 
 const BRANDS = [
-  { id: 'hoka', label: 'HOKA', endpoint: '/pricing-actions?brand=hoka' },
-  { id: 'bold', label: 'BOLD', endpoint: '/pricing-actions?brand=bold' },
+  { id: 'hoka',   label: 'HOKA',   endpoint: '/pricing-actions?brand=hoka' },
+  { id: 'bold',   label: 'BOLD',   endpoint: '/pricing-actions?brand=bold' },
+  { id: 'bamers', label: 'BAMERS', endpoint: '/pricing-actions?brand=bamers' },
+  { id: 'oakley', label: 'OAKLEY', endpoint: '/pricing-actions?brand=oakley' },
+]
+
+const BRAND_STATS = [
+  { id: 'hoka',   label: 'HOKA',   actions: 100,   skus: '3K',  stores: 4  },
+  { id: 'bold',   label: 'BOLD',   actions: 1777,  skus: '57K', stores: 35 },
+  { id: 'bamers', label: 'BAMERS', actions: 651,   skus: '9K',  stores: 25 },
+  { id: 'oakley', label: 'OAKLEY', actions: 292,   skus: '5K',  stores: 8  },
 ]
 
 function clp(n) {
@@ -19,6 +28,217 @@ function clpCompact(n) {
   if (Math.abs(v) >= 1_000) return '$' + (v / 1_000).toFixed(0) + 'K'
   return '$' + v.toLocaleString('es-CL')
 }
+
+// ── Landing Page ────────────────────────────────────────────────────────────
+
+function LandingPage({ onEnter }) {
+  return (
+    <div className="landing">
+      <div className="landing-inner">
+
+        <div className="landing-hero">
+          <div className="landing-logo">YNK<span className="logo-dot">.</span>pricing</div>
+          <h1 className="landing-headline">Optimizacion de precios basada en ML</h1>
+          <p className="landing-sub">
+            El sistema predice el momento y la profundidad optima de markdown por
+            producto, por tienda, por semana. Detecta cuando conviene subir precios
+            para recuperar margen. Activo para HOKA, BOLD, BAMERS y OAKLEY.
+          </p>
+          <button className="landing-cta" onClick={onEnter}>
+            Entrar al dashboard
+          </button>
+        </div>
+
+        <div className="landing-stats-grid">
+          {BRAND_STATS.map(b => (
+            <div key={b.id} className="lstat-card">
+              <div className="lstat-brand">{b.label}</div>
+              <div className="lstat-row">
+                <div className="lstat-item">
+                  <span className="lstat-val">{b.actions.toLocaleString('es-CL')}</span>
+                  <span className="lstat-label">acciones esta semana</span>
+                </div>
+                <div className="lstat-item">
+                  <span className="lstat-val">{b.skus}</span>
+                  <span className="lstat-label">SKUs</span>
+                </div>
+                <div className="lstat-item">
+                  <span className="lstat-val">{b.stores}</span>
+                  <span className="lstat-label">tiendas</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="landing-grid">
+
+          <div className="lcard">
+            <div className="lcard-label">Que hace</div>
+            <h2 className="lcard-title">Decisiones de precio automatizadas</h2>
+            <p className="lcard-body">
+              Cada semana, el sistema analiza cada SKU padre en cada tienda y genera
+              una recomendacion de accion: aplicar markdown, subir precio o no hacer nada.
+              Las recomendaciones incluyen el descuento exacto a aplicar, el impacto en
+              revenue esperado y el nivel de urgencia.
+            </p>
+            <div className="lcard-pill-row">
+              <span className="lpill lpill--red">Alta urgencia</span>
+              <span className="lpill lpill--amber">Media</span>
+              <span className="lpill lpill--slate">Baja</span>
+              <span className="lpill lpill--green">Subir precio</span>
+            </div>
+          </div>
+
+          <div className="lcard">
+            <div className="lcard-label">Datos utilizados</div>
+            <h2 className="lcard-title">1.8M+ transacciones procesadas</h2>
+            <p className="lcard-body">
+              El modelo entrena sobre el historial completo de ventas por tienda y talla.
+              Solo para BAMERS hay mas de 1.8 millones de filas de transacciones. Sobre esa
+              base se construyen las siguientes features:
+            </p>
+            <ul className="lcard-list">
+              <li>Ciclo de vida del producto — Lanzamiento, Crecimiento, Peak, Estable, Declive, Liquidacion</li>
+              <li>Elasticidad precio-demanda por SKU y tienda (log-log regression)</li>
+              <li>Velocidad de ventas y su tendencia reciente</li>
+              <li>Curva de tallas — que porcentaje de tallas sigue activo</li>
+              <li>Trafico de tienda y estacionalidad de semana del ano</li>
+            </ul>
+          </div>
+
+          <div className="lcard">
+            <div className="lcard-label">Como optimiza</div>
+            <h2 className="lcard-title">Dos modelos encadenados</h2>
+            <p className="lcard-body">
+              Primero un clasificador decide si corresponde hacer markdown. Si la
+              respuesta es si, un regresor calcula la profundidad optima dentro de
+              la escalera de descuentos permitida.
+            </p>
+            <div className="ldiscount-ladder">
+              <span className="ldl-step ldl-step--0">0%</span>
+              <span className="ldl-arrow">&rarr;</span>
+              <span className="ldl-step">15%</span>
+              <span className="ldl-arrow">&rarr;</span>
+              <span className="ldl-step">20%</span>
+              <span className="ldl-arrow">&rarr;</span>
+              <span className="ldl-step">30%</span>
+              <span className="ldl-arrow">&rarr;</span>
+              <span className="ldl-step ldl-step--max">40%</span>
+            </div>
+            <p className="lcard-body" style={{ marginTop: '12px' }}>
+              Cuando un producto esta vendiendo bien con descuento profundo, el sistema
+              puede recomendar subir el precio para recuperar margen sin sacrificar volumen.
+            </p>
+          </div>
+
+          <div className="lcard">
+            <div className="lcard-label">Metricas del modelo</div>
+            <h2 className="lcard-title">Como leer los numeros</h2>
+            <div className="lmetric-list">
+              <div className="lmetric">
+                <div className="lmetric-val">0.949</div>
+                <div className="lmetric-name">AUC — Clasificador</div>
+                <div className="lmetric-desc">
+                  Acierta el 94.9% de las veces al decidir si aplicar o no un markdown.
+                  Un modelo aleatorio tendria 0.5.
+                </div>
+              </div>
+              <div className="lmetric">
+                <div className="lmetric-val">7.9pp</div>
+                <div className="lmetric-name">MAE — Error de profundidad</div>
+                <div className="lmetric-desc">
+                  En promedio se equivoca en menos de 8 puntos porcentuales al predecir
+                  el descuento optimo. Si el modelo dice 30%, el real optimo esta entre 22% y 38%.
+                </div>
+              </div>
+              <div className="lmetric">
+                <div className="lmetric-val">0.739</div>
+                <div className="lmetric-name">R2 — Regresor (OAKLEY)</div>
+                <div className="lmetric-desc">
+                  El modelo explica el 73.9% de la variacion en la profundidad de descuento.
+                  Benchmarks de la industria para este tipo de problema estan entre 0.4 y 0.8.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="lcard">
+            <div className="lcard-label">Sistema de recomendaciones</div>
+            <h2 className="lcard-title">Logica de urgencia por ciclo de vida</h2>
+            <p className="lcard-body">
+              La urgencia de cada accion considera en conjunto el ciclo de vida del
+              producto, la salud de la curva de tallas, la tendencia de velocidad
+              y la elasticidad estimada.
+            </p>
+            <div className="llc-stages">
+              <div className="llc-stage"><span className="llc-dot llc-dot--green" />Lanzamiento</div>
+              <div className="llc-stage"><span className="llc-dot llc-dot--green" />Crecimiento</div>
+              <div className="llc-stage"><span className="llc-dot llc-dot--amber" />Peak</div>
+              <div className="llc-stage"><span className="llc-dot llc-dot--amber" />Estable</div>
+              <div className="llc-stage"><span className="llc-dot llc-dot--red" />Declive</div>
+              <div className="llc-stage"><span className="llc-dot llc-dot--red" />Liquidacion</div>
+            </div>
+            <p className="lcard-body" style={{ marginTop: '12px' }}>
+              Un producto en fase de liquidacion con mas del 40% de tallas agotadas
+              y tendencia de ventas negativa genera una alerta de alta urgencia automaticamente.
+              Un producto en crecimiento con ventas aceleradas puede recibir recomendacion
+              de subir precio.
+            </p>
+          </div>
+
+          <div className="lcard lcard--next">
+            <div className="lcard-label">Proximos pasos</div>
+            <h2 className="lcard-title">Datos pendientes con Jacques / equipo SAP</h2>
+            <p className="lcard-body">
+              Hay tres fuentes de datos que mejorarian materialmente la precision del sistema.
+              Cada una esta bloqueada esperando extraccion desde SAP.
+            </p>
+            <div className="lnext-list">
+              <div className="lnext-item">
+                <div className="lnext-name">Stock diario (ynk.stock)</div>
+                <div className="lnext-desc">
+                  Habilita la feature semanas de cobertura (weeks-of-cover). Permite
+                  calcular en cuantas semanas se agotara el inventario al ritmo actual
+                  de ventas — el driver mas directo para decidir si hacer markdown hoy
+                  o esperar.
+                </div>
+              </div>
+              <div className="lnext-item">
+                <div className="lnext-name">Costos unitarios (ynk.costos)</div>
+                <div className="lnext-desc">
+                  Habilita optimizacion por margen en lugar de revenue. Actualmente
+                  el modelo maximiza revenue; con costos se puede evitar recomendar
+                  descuentos que destruyen margen bruto aunque suban volumen.
+                </div>
+              </div>
+              <div className="lnext-item">
+                <div className="lnext-name">Historial de precios (ynk.precios_ofertas)</div>
+                <div className="lnext-desc">
+                  Permite detectar eventos de markdown limpios en el historial de
+                  entrenamiento. Actualmente los eventos se infieren de cambios en
+                  precio de venta, lo que introduce ruido en el label del clasificador.
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div className="landing-footer">
+          <span>YNK Pricing Optimization</span>
+          <span className="lfoot-sep">&middot;</span>
+          <span>Modelo v2 — XGBoost con validacion cruzada por serie de tiempo</span>
+          <span className="lfoot-sep">&middot;</span>
+          <span>GCP us-central1</span>
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
+// ── Action Row ───────────────────────────────────────────────────────────────
 
 function ActionRow({ action, status, onDecide }) {
   const [open, setOpen] = useState(false)
@@ -41,8 +261,8 @@ function ActionRow({ action, status, onDecide }) {
           <div className="product-name">{action.product || action.parent_sku}</div>
           <div className="product-meta">
             <span className="sku-code">{action.parent_sku}</span>
-            {action.subcategory && <span> · {action.subcategory}</span>}
-            <span> · {action.store_name || action.store}</span>
+            {action.subcategory && <span> &middot; {action.subcategory}</span>}
+            <span> &middot; {action.store_name || action.store}</span>
           </div>
         </div>
 
@@ -57,7 +277,7 @@ function ActionRow({ action, status, onDecide }) {
 
         <div className="row-velocity">
           <span>{action.current_velocity}</span>
-          <span className="vel-arrow">→</span>
+          <span className="vel-arrow">&rarr;</span>
           <span>{action.expected_velocity}</span>
           <span className="vel-unit">u/sem</span>
         </div>
@@ -104,6 +324,8 @@ function ActionRow({ action, status, onDecide }) {
   )
 }
 
+// ── CSV export ───────────────────────────────────────────────────────────────
+
 function exportCSV(items, filename) {
   if (!items.length) return
   const headers = Object.keys(items[0])
@@ -123,12 +345,15 @@ function exportCSV(items, filename) {
   URL.revokeObjectURL(url)
 }
 
+// ── App ──────────────────────────────────────────────────────────────────────
+
 function App() {
+  const [view, setView] = useState('landing')
   const [brand, setBrand] = useState(BRANDS[0])
   const [actions, setActions] = useState([])
   const [alerts, setAlerts] = useState([])
   const [info, setInfo] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
   const [filterStore, setFilterStore] = useState('all')
@@ -149,7 +374,7 @@ function App() {
 
     Promise.all([
       fetch(b.endpoint).then(r => r.json()),
-      fetch('/alerts?min_attrition=0.3').then(r => r.json()),
+      fetch(`/alerts?brand=${b.id}&min_attrition=0.3`).then(r => r.json()),
       fetch(`/model/info?brand=${b.id}`).then(r => r.json()),
     ]).then(([ad, al, mi]) => {
       setActions(ad.items || [])
@@ -162,7 +387,10 @@ function App() {
     })
   }, [])
 
-  useEffect(() => { loadBrand(brand) }, [])
+  const handleEnter = useCallback(() => {
+    setView('dashboard')
+    loadBrand(BRANDS[0])
+  }, [loadBrand])
 
   const stores = useMemo(() =>
     [...new Set(actions.map(a => a.store_name || a.store).filter(Boolean))].sort(),
@@ -216,22 +444,24 @@ function App() {
 
   const reviewedCount = Object.keys(decisions).length
   const approvedItems = actions.filter(a => decisions[`${a.parent_sku}-${a.store}`] === 'approved')
-  const rejectedCount = Object.values(decisions).filter(v => v === 'rejected').length
   const approvedImpact = approvedItems.reduce((s, a) => s + (Number(a.rev_delta) || 0), 0)
 
   const handleExport = () => {
     exportCSV(approvedItems, `acciones_aprobadas_${brand.id}_${new Date().toISOString().slice(0, 10)}.csv`)
   }
 
+  if (view === 'landing') return <LandingPage onEnter={handleEnter} />
+
   if (loading) return <div className="loading-screen"><div className="spinner" /><span>Cargando {brand.label}...</span></div>
   if (error) return <div className="error-screen"><AlertTriangle size={24} /><p>{error}</p><p className="error-hint">python3 -m uvicorn api.main:app --port 8080</p></div>
 
   return (
     <div className="app">
-      {/* Header */}
       <header className="header">
         <div className="header-brand">
-          <h1 className="logo">YNK<span className="logo-dot">.</span>pricing</h1>
+          <button className="logo logo--btn" onClick={() => setView('landing')} title="Volver al inicio">
+            YNK<span className="logo-dot">.</span>pricing
+          </button>
           <nav className="brand-tabs">
             {BRANDS.map(b => (
               <button
@@ -250,7 +480,6 @@ function App() {
         </div>
       </header>
 
-      {/* Stats */}
       <div className="stats-row">
         <div className="kpi">
           <div className="kpi-value">{actions.filter(a => a.action_type === 'increase').length}</div>
@@ -284,18 +513,11 @@ function App() {
         </div>
       </div>
 
-      {/* Toolbar */}
       <div className="toolbar">
         <div className="search-box">
           <Search size={15} />
-          <input
-            type="text"
-            placeholder="Buscar SKU o producto..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+          <input type="text" placeholder="Buscar SKU o producto..." value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-
         <div className="filter-group">
           <Filter size={14} />
           <select value={filterStore} onChange={e => setFilterStore(e.target.value)}>
@@ -316,64 +538,35 @@ function App() {
             </select>
           )}
         </div>
-
         <div className="toolbar-actions">
           <span className="result-count">{filtered.length} resultados</span>
-          <button className="tbtn tbtn--approve" onClick={() => bulkDecide(filtered, 'approved')}>
-            <Check size={13} /> Aprobar filtradas
-          </button>
-          <button className="tbtn tbtn--reject" onClick={() => bulkDecide(filtered, 'rejected')}>
-            <X size={13} /> Rechazar filtradas
-          </button>
+          <button className="tbtn tbtn--approve" onClick={() => bulkDecide(filtered, 'approved')}><Check size={13} /> Aprobar filtradas</button>
+          <button className="tbtn tbtn--reject" onClick={() => bulkDecide(filtered, 'rejected')}><X size={13} /> Rechazar filtradas</button>
           {approvedItems.length > 0 && (
-            <button className="tbtn tbtn--export" onClick={handleExport}>
-              <Download size={13} /> Exportar ({approvedItems.length})
-            </button>
+            <button className="tbtn tbtn--export" onClick={handleExport}><Download size={13} /> Exportar ({approvedItems.length})</button>
           )}
         </div>
       </div>
 
-      {/* Price Increases Section */}
       {increases.length > 0 && (
         <section className="section section--increases">
-          <div className="section-header">
-            <TrendingUp size={16} />
-            <h2>Subir precio — Recuperar margen ({increases.length})</h2>
-          </div>
+          <div className="section-header"><TrendingUp size={16} /><h2>Subir precio — Recuperar margen ({increases.length})</h2></div>
           <div className="list">
             {increases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return (
-                <ActionRow
-                  key={k}
-                  action={a}
-                  status={decisions[k] || null}
-                  onDecide={st => setDecision(k, st)}
-                />
-              )
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} />
             })}
           </div>
         </section>
       )}
 
-      {/* Markdowns Section */}
       {decreases.length > 0 && (
         <section className="section section--markdowns">
-          <div className="section-header">
-            <TrendingDown size={16} />
-            <h2>Markdown ({decreases.length})</h2>
-          </div>
+          <div className="section-header"><TrendingDown size={16} /><h2>Markdown ({decreases.length})</h2></div>
           <div className="list">
             {decreases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return (
-                <ActionRow
-                  key={k}
-                  action={a}
-                  status={decisions[k] || null}
-                  onDecide={st => setDecision(k, st)}
-                />
-              )
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} />
             })}
           </div>
         </section>
@@ -381,13 +574,9 @@ function App() {
 
       {filtered.length === 0 && <div className="empty-state">No hay acciones con estos filtros</div>}
 
-      {/* Alerts */}
       {alerts.length > 0 && (
         <section className="section section--alerts">
-          <div className="section-header">
-            <AlertTriangle size={16} />
-            <h2>Alertas de curva de tallas ({alerts.length})</h2>
-          </div>
+          <div className="section-header"><AlertTriangle size={16} /><h2>Alertas de curva de tallas ({alerts.length})</h2></div>
           <div className="alert-grid">
             {alerts.slice(0, 15).map((a, i) => (
               <div key={i} className="alert-card">

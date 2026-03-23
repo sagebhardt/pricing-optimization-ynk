@@ -20,6 +20,17 @@ EXCLUDE_SKUS = [
     "HANDBAG01",           # Shopping bags
 ]
 
+# Non-retail stores to exclude from pricing actions (logistics, digital, internal)
+EXCLUDE_STORES_PRICING = [
+    "DX01",   # Centro Logistico Dexim
+    "B611",   # Bamers Ventas Internas
+    "B997",   # Marketplace NC BM
+    "514",    # Locker Virtual Dexim
+    "170",    # Bamers Digital
+    "508",    # Bamers Digital II
+    "D005",   # Oakley Ventas Internas
+]
+
 # Brand configurations
 BRANDS = {
     "HOKA": {
@@ -32,6 +43,25 @@ BRANDS = {
         "banner": "BOLD",
         "brand_codes": ["NI", "PM", "AD", "JR", "NB", "VN", "NE", "NP", "CV", "CAH"],
         "stores_active": None,  # All stores
+        "stores_all": None,
+    },
+    "BAMERS": {
+        "banner": "BAMERS",
+        "brand_codes": ["BM", "SK", "CR", "CAB"],
+        "stores_active": [
+            "B002", "B003", "B004", "B008", "B010", "B011", "B012",
+            "B019", "B022", "B024", "B046", "B047", "B048", "B049",
+            "B050", "B052", "B054", "B055", "B056", "B057", "B058",
+            "B059", "B060", "B602", "B603",
+        ],
+        "stores_all": None,  # All stores for historical training
+    },
+    "OAKLEY": {
+        "banner": "OAKLEY",
+        "brand_codes": ["OK"],
+        "stores_active": [
+            "D002", "D004", "D011", "D012", "D013", "D014", "D016", "E001",
+        ],
         "stores_all": None,
     },
 }

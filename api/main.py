@@ -127,11 +127,16 @@ def load_models():
     # Load product master
     state["products"] = pd.read_parquet(RAW_DIR / "hoka_products.parquet")
 
-    # Load alerts
-    try:
-        state["alerts"] = pd.read_parquet(PROCESSED_DIR / "size_curve_alerts.parquet")
-    except FileNotFoundError:
-        state["alerts"] = pd.DataFrame()
+    # Load alerts from all brands
+    alert_frames = []
+    for brand_dir in (Path(__file__).parent.parent / "data" / "processed").iterdir():
+        if brand_dir.is_dir():
+            alert_path = brand_dir / "size_curve_alerts.parquet"
+            if alert_path.exists():
+                df = pd.read_parquet(alert_path)
+                df["brand"] = brand_dir.name
+                alert_frames.append(df)
+    state["alerts"] = pd.concat(alert_frames, ignore_index=True) if alert_frames else pd.DataFrame()
 
     state["explainer"] = shap.TreeExplainer(state["cls_model"])
     print(f"Loaded model {state['model_version']} with {len(state['features']):,} feature rows")
@@ -333,11 +338,16 @@ def get_sku_detail(sku_id: str):
 
 
 @app.get("/alerts")
-def get_size_alerts(min_attrition: float = Query(0.3)):
-    """Get size curve depletion alerts."""
+def get_size_alerts(brand: Optional[str] = Query(None), min_attrition: float = Query(0.3)):
+    """Get size curve depletion alerts. Optionally filter by brand."""
     alerts = state.get("alerts", pd.DataFrame())
     if len(alerts) == 0:
-        return {"alerts": []}
+        return {"alerts": [], "week": None, "total_alerts": 0}
+
+    if brand and "brand" in alerts.columns:
+        alerts = alerts[alerts["brand"] == brand.lower()]
+        if len(alerts) == 0:
+            return {"alerts": [], "week": None, "total_alerts": 0}
 
     latest = alerts[alerts["week"] == alerts["week"].max()]
     latest = latest[latest["attrition_rate"] >= min_attrition].sort_values("attrition_rate", ascending=False)
@@ -347,6 +357,7 @@ def get_size_alerts(min_attrition: float = Query(0.3)):
         results.append({
             "parent_sku": row["codigo_padre"],
             "store": row["centro"],
+            "brand": row.get("brand", ""),
             "active_sizes": int(row["active_sizes_4w"]),
             "total_sizes": int(row["total_sizes_ever"]),
             "attrition_rate": round(row["attrition_rate"], 3),

@@ -1,5 +1,6 @@
-# HOKA Data Brief — Pricing & Markdown Optimization POC
-**Date:** March 22, 2026
+# Data Brief — Pricing & Markdown Optimization
+**Date:** March 23, 2026 (updated)
+**Active brands:** HOKA, BOLD, BAMERS, OAKLEY
 **Source:** `consultas` database @ 190.54.179.91:5432
 
 ---
@@ -129,14 +130,22 @@
 
 ## 4. Data Request for Jacques
 
-**Priority 1 (blocks POC start):**
-1. **Populate `ynk.stock` or `ynk.inventario`** with daily stock snapshots for HOKA stores (7501, 7502, AB75). Ideally Jan 2024 → present. Minimum fields: `fecha`, `tienda_id`, `sku_id`, `stock`, `transit`.
-2. **Populate `ynk.costos`** with HOKA unit costs. Minimum fields: `sku_id`, `costo`, `fecha`. Even a single current-cost snapshot is enough to start.
-3. **Populate `ynk.precios_ofertas`** with HOKA pricing history. Minimum fields: `tienda_id`, `sku_id`, `precio_normal`, `precio_oferta`, `fecha_desde`, `fecha_hasta`.
+**Scope: All active brands — HOKA, BOLD, BAMERS, OAKLEY**
 
-**Priority 2 (improves POC quality):**
-4. Fill `temporada` field in product master for HOKA SKUs, or provide a mapping file.
-5. Populate `ynk.ordenes_compra` and `ynk.recepciones_ordenes_compra` for HOKA.
+The pricing optimization model is now live for all 4 brands. The missing data below applies across all of them — populating these tables will improve every brand's model simultaneously.
+
+**Priority 1 (blocks margin optimization — currently revenue-only):**
+1. **Populate `ynk.stock` or `ynk.inventario`** with daily stock snapshots. Minimum fields: `fecha`, `tienda_id`, `sku_id`, `stock`, `transit`. Ideally Jan 2024 → present.
+   - HOKA stores: 7501, 7502, AB75
+   - BOLD stores: all
+   - BAMERS stores: B002–B060, B602, B603
+   - OAKLEY stores: D002, D004, D011–D014, D016, E001
+2. **Populate `ynk.costos`** with unit costs per SKU. Minimum fields: `sku_id`, `costo`, `fecha`. Even a single current-cost snapshot per brand is enough to start.
+3. **Populate `ynk.precios_ofertas`** with pricing/offer history. Minimum fields: `tienda_id`, `sku_id`, `precio_normal`, `precio_oferta`, `fecha_desde`, `fecha_hasta`.
+
+**Priority 2 (improves model quality):**
+4. Fill `temporada` field in `sku_tableau` for all brands (currently 99%+ NULL). Or provide a mapping file.
+5. Populate `ynk.ordenes_compra` and `ynk.recepciones_ordenes_compra` — purchase orders & receipts for all brands.
 
 ---
 
