@@ -12,5 +12,8 @@ dashboard/src/assets/hero.png
 dashboard/src/assets/react.svg
 dashboard/src/assets/vite.svg
 api/static/
+decisions/
+exports/
+audit/
 *.parquet
 yaneken-pricing-markdown-optimization-brief.docx

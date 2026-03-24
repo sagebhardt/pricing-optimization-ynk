@@ -49,15 +49,40 @@ EXCLUDE_COLS = [
 ]
 
 
-def round_to_clp(price):
-    """Round price to Chilean retail convention (ending in ,990)."""
+# Cognitive price anchors — each sits just below a round psychological threshold.
+PRICE_ANCHORS = [
+    990, 1990, 2990, 3990, 4990, 5990, 6990, 7990, 8990, 9990,
+    12990, 14990, 16990, 19990,
+    24990, 29990, 34990, 39990, 44990, 49990,
+    54990, 59990, 69990, 79990, 89990, 99990,
+    109990, 119990, 129990, 139990, 149990, 169990, 199990,
+    249990, 299990, 399990, 499990, 599990, 799990, 999990,
+]
+
+
+def snap_to_price_anchor(price, direction="down"):
+    """
+    Snap price to the nearest cognitive price anchor.
+    direction: "down" (markdowns), "up" (increases), "nearest" (display).
+    """
     if price <= 0:
         return 0
-    # Round to nearest 1000, then subtract 10
-    rounded = round(price / 1000) * 1000 - 10
-    if rounded < 990:
-        rounded = 990
-    return int(rounded)
+    if price > PRICE_ANCHORS[-1]:
+        step = 10000
+        if direction == "down":
+            return int(price // step) * step - 10
+        elif direction == "up":
+            return (int(price // step) + 1) * step - 10
+        else:
+            return int(round(price / step) * step - 10)
+    if direction == "down":
+        valid = [a for a in PRICE_ANCHORS if a <= price]
+        return valid[-1] if valid else PRICE_ANCHORS[0]
+    elif direction == "up":
+        valid = [a for a in PRICE_ANCHORS if a >= price]
+        return valid[0] if valid else PRICE_ANCHORS[-1]
+    else:
+        return min(PRICE_ANCHORS, key=lambda a: abs(a - price))
 
 
 def snap_to_discount_step(discount_pct):
@@ -294,8 +319,8 @@ def generate_weekly_actions(target_week=None):
             continue
         recommended_step = DISCOUNT_STEPS[current_idx - 1]
 
-        recommended_price = round_to_clp(current_list_price * (1 - recommended_step))
-        current_final_rounded = round_to_clp(current_final_price) if pd.notna(current_final_price) else 0
+        recommended_price = snap_to_price_anchor(current_list_price * (1 - recommended_step), direction="up")
+        current_final_rounded = snap_to_price_anchor(current_final_price, direction="nearest") if pd.notna(current_final_price) else 0
 
         if recommended_price <= current_final_rounded + 2000:
             continue
@@ -395,10 +420,10 @@ def generate_weekly_actions(target_week=None):
                 continue  # No action needed
 
         # Calculate recommended price
-        recommended_price = round_to_clp(current_list_price * (1 - recommended_step))
+        recommended_price = snap_to_price_anchor(current_list_price * (1 - recommended_step), direction="nearest")
 
         # If recommended price equals current final price, skip
-        current_final_rounded = round_to_clp(current_final_price) if pd.notna(current_final_price) else 0
+        current_final_rounded = snap_to_price_anchor(current_final_price, direction="nearest") if pd.notna(current_final_price) else 0
         if abs(recommended_price - current_final_rounded) < 2000:
             continue
 

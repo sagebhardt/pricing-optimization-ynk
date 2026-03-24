@@ -8,7 +8,7 @@ weekly_actions/{brand}/.
 
 Generates the actual weekly output the commercial team needs:
 - Which parent SKUs to reprice this week
-- Current price -> recommended price (in CLP, rounded to xxx,990)
+- Current price -> recommended price (snapped to cognitive price anchors)
 - Expected unit lift at new price
 - Urgency level and reason
 - Grouped by parent SKU (not individual sizes)
@@ -16,7 +16,7 @@ Generates the actual weekly output the commercial team needs:
 Respects business reality:
 - Prices change once per week
 - Discount ladder: 0% -> 15% -> 20% -> 30% -> 40%
-- Prices end in ,990 or ,000
+- Prices snap to cognitive anchors (just below round thresholds: 9990, 14990, 19990, 24990, etc.)
 - Markdown decisions are per parent SKU, not per size
 """
 
@@ -83,15 +83,55 @@ def _load_store_names(brand: str) -> dict:
         return {}
 
 
-def round_to_clp(price):
-    """Round price to Chilean retail convention (ending in ,990)."""
+# Cognitive price anchors — each sits just below a round psychological threshold.
+# Prices like 27,990 or 33,990 fall in "no man's land" (same mental bucket as 29,990/34,990)
+# and sacrifice margin without crossing a perceptual boundary.
+PRICE_ANCHORS = [
+    # < 10k (1k steps — small absolute values, every step matters)
+    990, 1990, 2990, 3990, 4990, 5990, 6990, 7990, 8990, 9990,
+    # 10k–20k (key thresholds: 10k, 15k, 20k)
+    12990, 14990, 16990, 19990,
+    # 20k–50k (5k steps)
+    24990, 29990, 34990, 39990, 44990, 49990,
+    # 50k–100k (5–10k steps)
+    54990, 59990, 69990, 79990, 89990, 99990,
+    # 100k–200k (10–20k steps)
+    109990, 119990, 129990, 139990, 149990, 169990, 199990,
+    # 200k+ (larger steps)
+    249990, 299990, 399990, 499990, 599990, 799990, 999990,
+]
+
+
+def snap_to_price_anchor(price, direction="down"):
+    """
+    Snap price to the nearest cognitive price anchor.
+
+    direction:
+      "down"    — largest anchor ≤ price (use for markdowns)
+      "up"      — smallest anchor ≥ price (use for price increases)
+      "nearest" — closest anchor (use for display / current price)
+    """
     if price <= 0:
         return 0
-    # Round to nearest 1000, then subtract 10
-    rounded = round(price / 1000) * 1000 - 10
-    if rounded < 990:
-        rounded = 990
-    return int(rounded)
+
+    # Prices above our table: fall back to 10k-step rounding
+    if price > PRICE_ANCHORS[-1]:
+        step = 10000
+        if direction == "down":
+            return int(price // step) * step - 10
+        elif direction == "up":
+            return (int(price // step) + 1) * step - 10
+        else:
+            return int(round(price / step) * step - 10)
+
+    if direction == "down":
+        valid = [a for a in PRICE_ANCHORS if a <= price]
+        return valid[-1] if valid else PRICE_ANCHORS[0]
+    elif direction == "up":
+        valid = [a for a in PRICE_ANCHORS if a >= price]
+        return valid[0] if valid else PRICE_ANCHORS[-1]
+    else:  # nearest
+        return min(PRICE_ANCHORS, key=lambda a: abs(a - price))
 
 
 def snap_to_discount_step(discount_pct):
@@ -242,6 +282,43 @@ def classify_urgency(row):
         reasons.append("Model predicts markdown based on overall patterns")
 
     return urgency, reasons
+
+
+def compute_confidence_tier(prob, velocity, age, has_elasticity, action_type):
+    """
+    Rate how trustworthy a recommendation is.
+
+    HIGH:        Strong demand signals + elasticity data
+    MEDIUM:      Decent signals, some gaps
+    LOW:         Weak signals, high uncertainty
+    SPECULATIVE: Fabricated velocity estimates (increases w/o elasticity)
+    """
+    if action_type == "increase" and not has_elasticity:
+        return "SPECULATIVE"
+
+    score = 0
+    if prob > 0.85:
+        score += 3
+    elif prob > 0.70:
+        score += 2
+    elif prob > 0.50:
+        score += 1
+
+    if has_elasticity:
+        score += 2
+    if velocity >= 2.0:
+        score += 2
+    elif velocity >= 1.0:
+        score += 1
+
+    if age >= 8:
+        score += 1  # enough history
+
+    if score >= 6:
+        return "HIGH"
+    if score >= 4:
+        return "MEDIUM"
+    return "LOW"
 
 
 def generate_weekly_actions_for_brand(brand: str, target_week=None):
@@ -462,18 +539,33 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         if current_idx <= 0:
             continue
         recommended_step = DISCOUNT_STEPS[current_idx - 1]
-        recommended_price = round_to_clp(list_price * (1 - recommended_step))
-        current_final_rounded = round_to_clp(final_price) if pd.notna(final_price) else 0
+        recommended_price = snap_to_price_anchor(list_price * (1 - recommended_step), direction="up")
+        current_final_rounded = snap_to_price_anchor(final_price, direction="nearest") if pd.notna(final_price) else 0
 
         if recommended_price <= current_final_rounded + 2000:
             continue
 
-        vol_loss = 0.25
-        expected_velocity = max(velocity * (1 - vol_loss), 0.3)
-        current_weekly_rev = velocity * (final_price if pd.notna(final_price) else list_price)
+        elasticity = elast_map.get(row["codigo_padre"])
+        has_elast = elasticity is not None and elasticity < -0.3
+
+        if has_elast:
+            price_increase_pct = (recommended_price - current_final_rounded) / max(current_final_rounded, 1)
+            vol_change = price_increase_pct * elasticity  # elasticity is negative → vol drops
+            expected_velocity = max(velocity * (1 + vol_change), 0.3)
+        else:
+            vol_loss = 0.25
+            expected_velocity = max(velocity * (1 - vol_loss), 0.3)
+
+        current_weekly_rev = velocity * current_final_rounded
         expected_weekly_rev = expected_velocity * recommended_price
 
+        confidence_tier = compute_confidence_tier(
+            row["markdown_probability"], velocity, age, has_elast, "increase"
+        )
+
         reasons = [f"Selling {velocity:.1f} u/sem at {current_step:.0%} off -- test higher price"]
+        if not has_elast:
+            reasons.append("Sin elasticidad — volumen estimado")
         if vel_trend > 1.1:
             reasons.append("Sales accelerating")
         n_sell = int(row["sizes_selling"])
@@ -510,6 +602,7 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "urgency": "INCREASE",
             "reasons": "; ".join(reasons),
             "model_confidence": round(row["markdown_probability"], 3),
+            "confidence_tier": confidence_tier,
             "action_type": "increase",
         })
 
@@ -552,17 +645,19 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             else:
                 continue
 
-        recommended_price = round_to_clp(list_price * (1 - recommended_step))
-        current_final_rounded = round_to_clp(final_price) if pd.notna(final_price) else 0
+        recommended_price = snap_to_price_anchor(list_price * (1 - recommended_step), direction="nearest")
+        current_final_rounded = snap_to_price_anchor(final_price, direction="nearest") if pd.notna(final_price) else 0
         if abs(recommended_price - current_final_rounded) < 2000:
             continue
 
         elasticity = elast_map.get(parent)
+        has_elast = elasticity is not None and elasticity < -0.3
         expected_velocity = compute_expected_velocity(velocity, disc_rate, recommended_step, elasticity)
 
         urgency, reasons = classify_urgency(row)
+        confidence_tier = compute_confidence_tier(avg_prob, velocity, age, has_elast, "decrease")
 
-        current_weekly_rev = velocity * (final_price if pd.notna(final_price) else list_price)
+        current_weekly_rev = velocity * current_final_rounded
         expected_weekly_rev = expected_velocity * recommended_price
 
         n_sell = int(row["sizes_selling"])
@@ -597,6 +692,7 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "urgency": urgency,
             "reasons": "; ".join(reasons),
             "model_confidence": round(avg_prob, 3),
+            "confidence_tier": confidence_tier,
             "action_type": "decrease",
         })
 

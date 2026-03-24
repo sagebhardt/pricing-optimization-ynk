@@ -32,7 +32,7 @@ for BRAND in "${BRANDS[@]}"; do
     echo "--- $BRAND ---"
     BRAND_LOG="$LOG_DIR/${BRAND,,}_${TIMESTAMP}.log"
 
-    if python3 run_brand.py "$BRAND" --steps extract aggregate train pricing > "$BRAND_LOG" 2>&1; then
+    if python3 run_brand.py "$BRAND" --steps extract features enhance aggregate train pricing > "$BRAND_LOG" 2>&1; then
         ACTIONS_FILE=$(ls -t weekly_actions/${BRAND,,}/pricing_actions_*.csv 2>/dev/null | head -1)
         if [ -n "$ACTIONS_FILE" ]; then
             N_ACTIONS=$(tail -n +2 "$ACTIONS_FILE" | wc -l | tr -d ' ')
@@ -59,7 +59,7 @@ if [ ${#FAILED[@]} -lt ${#BRANDS[@]} ]; then
         --image us-central1-docker.pkg.dev/ynk-pricing-optimization/ynk-docker/pricing-api \
         --region us-central1 --project ynk-pricing-optimization --platform managed \
         --memory 2Gi --cpu 2 --allow-unauthenticated \
-        --set-env-vars "PYTHONPATH=/app" \
+        --set-env-vars "PYTHONPATH=/app,GCS_BUCKET=ynk-pricing-decisions,GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID" \
         --quiet >> "$LOG_DIR/deploy_${TIMESTAMP}.log" 2>&1
     echo "  Deployed to Cloud Run"
 fi

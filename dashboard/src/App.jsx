@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter } from 'lucide-react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2 } from 'lucide-react'
 import './App.css'
 
 const BRANDS = [
@@ -17,19 +17,47 @@ const BRAND_STATS = [
 ]
 
 function clp(n) {
-  if (n === null || n === undefined || n === '' || isNaN(n)) return '—'
+  if (n === null || n === undefined || n === '' || isNaN(n)) return '\u2014'
   return '$' + Math.round(Number(n)).toLocaleString('es-CL')
 }
 
 function clpCompact(n) {
-  if (n === null || n === undefined || n === '' || isNaN(n)) return '—'
+  if (n === null || n === undefined || n === '' || isNaN(n)) return '\u2014'
   const v = Number(n)
   if (Math.abs(v) >= 1_000_000) return '$' + (v / 1_000_000).toFixed(1) + 'M'
   if (Math.abs(v) >= 1_000) return '$' + (v / 1_000).toFixed(0) + 'K'
   return '$' + v.toLocaleString('es-CL')
 }
 
-// ── Landing Page ────────────────────────────────────────────────────────────
+// ── Login Screen ──────────────────────────────────────────────────────────────
+
+function LoginScreen({ clientId, onLogin }) {
+  const btnRef = useRef(null)
+
+  useEffect(() => {
+    if (!window.google?.accounts?.id || !btnRef.current) return
+    google.accounts.id.initialize({
+      client_id: clientId,
+      callback: (response) => onLogin(response.credential),
+    })
+    google.accounts.id.renderButton(btnRef.current, {
+      theme: 'outline', size: 'large', text: 'signin_with',
+      shape: 'rectangular', width: 300,
+    })
+  }, [clientId, onLogin])
+
+  return (
+    <div className="login-screen">
+      <div className="login-card">
+        <div className="login-logo">YNK<span className="logo-dot">.</span>pricing</div>
+        <p className="login-sub">Inicia sesion con tu cuenta de Google</p>
+        <div ref={btnRef} className="login-btn-wrap" />
+      </div>
+    </div>
+  )
+}
+
+// ── Landing Page ──────────────────────────────────────────────────────────────
 
 function LandingPage({ onEnter }) {
   return (
@@ -238,11 +266,12 @@ function LandingPage({ onEnter }) {
   )
 }
 
-// ── Action Row ───────────────────────────────────────────────────────────────
+// ── Action Row ────────────────────────────────────────────────────────────────
 
-function ActionRow({ action, status, onDecide }) {
+function ActionRow({ action, status, onDecide, canApprove, feedback }) {
   const [open, setOpen] = useState(false)
   const isIncrease = action.action_type === 'increase'
+  const tier = action.confidence_tier || ''
   const urgencyClass = isIncrease ? 'increase' : (action.urgency || '').toLowerCase()
   const delta = Number(action.rev_delta) || 0
 
@@ -258,7 +287,11 @@ function ActionRow({ action, status, onDecide }) {
         </div>
 
         <div className="row-product">
-          <div className="product-name">{action.product || action.parent_sku}</div>
+          <div className="product-name">
+            {action.product || action.parent_sku}
+            {tier && <span className={`tier-badge tier-badge--${tier.toLowerCase()}`}>{tier}</span>}
+            {feedback && <span className={`fb-badge fb-badge--${feedback.implemented ? 'yes' : 'no'}`}>{feedback.implemented ? 'Impl.' : 'No impl.'}</span>}
+          </div>
           <div className="product-meta">
             <span className="sku-code">{action.parent_sku}</span>
             {action.subcategory && <span> &middot; {action.subcategory}</span>}
@@ -286,23 +319,25 @@ function ActionRow({ action, status, onDecide }) {
           {delta >= 0 ? '+' : ''}{clpCompact(delta)}
         </div>
 
-        <div className="row-actions" onClick={e => e.stopPropagation()}>
-          {!status ? (
-            <>
-              <button className="btn-approve" onClick={() => onDecide('approved')} title="Aprobar">
-                <Check size={14} />
+        {canApprove && (
+          <div className="row-actions" onClick={e => e.stopPropagation()}>
+            {!status ? (
+              <>
+                <button className="btn-approve" onClick={() => onDecide('approved')} title="Aprobar">
+                  <Check size={14} />
+                </button>
+                <button className="btn-reject" onClick={() => onDecide('rejected')} title="Rechazar">
+                  <X size={14} />
+                </button>
+              </>
+            ) : (
+              <button className={`btn-decided btn-decided--${status}`} onClick={() => onDecide(null)} title="Deshacer">
+                {status === 'approved' ? <Check size={12} /> : <X size={12} />}
+                <span>{status === 'approved' ? 'OK' : '\u2014'}</span>
               </button>
-              <button className="btn-reject" onClick={() => onDecide('rejected')} title="Rechazar">
-                <X size={14} />
-              </button>
-            </>
-          ) : (
-            <button className={`btn-decided btn-decided--${status}`} onClick={() => onDecide(null)} title="Deshacer">
-              {status === 'approved' ? <Check size={12} /> : <X size={12} />}
-              <span>{status === 'approved' ? 'OK' : '—'}</span>
-            </button>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         <div className="row-chevron">{open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</div>
       </div>
@@ -324,34 +359,135 @@ function ActionRow({ action, status, onDecide }) {
   )
 }
 
-// ── CSV export ───────────────────────────────────────────────────────────────
+// ── Admin Panel ───────────────────────────────────────────────────────────────
 
-function exportCSV(items, filename) {
-  if (!items.length) return
-  const headers = Object.keys(items[0])
-  const csv = [
-    headers.join(','),
-    ...items.map(row => headers.map(h => {
-      const v = row[h]
-      return typeof v === 'string' && v.includes(',') ? `"${v}"` : v
-    }).join(','))
-  ].join('\n')
-  const blob = new Blob([csv], { type: 'text/csv' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
+const ALL_BRANDS = ['hoka', 'bold', 'bamers', 'oakley']
+
+function AdminPanel({ authFetch, onClose }) {
+  const [cfg, setCfg] = useState(null)
+  const [email, setEmail] = useState('')
+  const [role, setRole] = useState('viewer')
+  const [brands, setBrands] = useState([])
+  const [name, setName] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(() => {
+    authFetch('/admin/users').then(r => r.json()).then(setCfg).catch(() => {})
+  }, [authFetch])
+
+  useEffect(() => { load() }, [load])
+
+  const handleAdd = () => {
+    if (!email) return
+    setSaving(true)
+    authFetch('/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, role, brands: role === 'brand_manager' ? brands : null, name }),
+    }).then(() => {
+      setEmail(''); setName(''); setRole('viewer'); setBrands([])
+      load()
+    }).finally(() => setSaving(false))
+  }
+
+  const handleDelete = (userEmail) => {
+    if (!confirm(`Eliminar ${userEmail}?`)) return
+    authFetch(`/admin/users?email=${encodeURIComponent(userEmail)}`, { method: 'DELETE' })
+      .then(() => load())
+  }
+
+  const toggleBrand = (b) => {
+    setBrands(prev => prev.includes(b) ? prev.filter(x => x !== b) : [...prev, b])
+  }
+
+  if (!cfg) return null
+
+  const users = Object.entries(cfg.users || {}).sort((a, b) => a[0].localeCompare(b[0]))
+
+  return (
+    <div className="admin-overlay" onClick={onClose}>
+      <div className="admin-panel" onClick={e => e.stopPropagation()}>
+        <div className="admin-header">
+          <h2>Administrar usuarios</h2>
+          <button className="admin-close" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="admin-body">
+          <table className="admin-table">
+            <thead>
+              <tr><th>Email</th><th>Nombre</th><th>Rol</th><th>Marcas</th><th></th></tr>
+            </thead>
+            <tbody>
+              {users.map(([uemail, u]) => (
+                <tr key={uemail}>
+                  <td className="admin-email">{uemail}</td>
+                  <td>{u.name || '\u2014'}</td>
+                  <td><span className={`role-tag role-tag--${u.role}`}>{u.role}</span></td>
+                  <td>{u.brands ? u.brands.join(', ') : 'todas'}</td>
+                  <td>
+                    <button className="admin-del" onClick={() => handleDelete(uemail)} title="Eliminar">
+                      <Trash2 size={13} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {users.length === 0 && (
+                <tr><td colSpan={5} className="admin-empty">No hay usuarios configurados. Los de @{(cfg.allowed_domains || []).join(', @')} entran como viewer.</td></tr>
+              )}
+            </tbody>
+          </table>
+
+          <div className="admin-add">
+            <h3><UserPlus size={14} /> Agregar usuario</h3>
+            <div className="admin-form">
+              <input placeholder="email@yaneken.cl" value={email} onChange={e => setEmail(e.target.value)} />
+              <input placeholder="Nombre (opcional)" value={name} onChange={e => setName(e.target.value)} />
+              <select value={role} onChange={e => setRole(e.target.value)}>
+                <option value="admin">Admin</option>
+                <option value="brand_manager">Brand Manager</option>
+                <option value="viewer">Viewer</option>
+              </select>
+              {role === 'brand_manager' && (
+                <div className="admin-brands">
+                  {ALL_BRANDS.map(b => (
+                    <label key={b} className="admin-brand-check">
+                      <input type="checkbox" checked={brands.includes(b)} onChange={() => toggleBrand(b)} />
+                      {b.toUpperCase()}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <button className="admin-save" onClick={handleAdd} disabled={saving || !email}>
+                {saving ? 'Guardando...' : 'Agregar'}
+              </button>
+            </div>
+          </div>
+
+          <div className="admin-domains">
+            <span className="admin-domains-label">Dominios permitidos (viewer por defecto):</span>
+            <span className="admin-domains-val">{(cfg.allowed_domains || []).map(d => `@${d}`).join(', ')}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
-// ── App ──────────────────────────────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────────────────────────
 
 function App() {
+  // Auth state
+  const [authConfig, setAuthConfig] = useState(null)
+  const [user, setUser] = useState(null)
+  const [authToken, setAuthToken] = useState(() => sessionStorage.getItem('ynk_token') || '')
+
+  // Dashboard state
   const [view, setView] = useState('landing')
   const [brand, setBrand] = useState(BRANDS[0])
   const [actions, setActions] = useState([])
   const [alerts, setAlerts] = useState([])
+  const [auditLog, setAuditLog] = useState([])
+  const [feedback, setFeedback] = useState({})
   const [info, setInfo] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -360,12 +496,93 @@ function App() {
   const [filterUrgency, setFilterUrgency] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
   const [decisions, setDecisions] = useState({})
+  const [week, setWeek] = useState('')
+  const [copyMsg, setCopyMsg] = useState('')
+  const [showAdmin, setShowAdmin] = useState(false)
+  const [showExportConfirm, setShowExportConfirm] = useState(false)
+  const [toast, setToast] = useState(null)
+
+  // Permissions
+  const canApprove = user?.permissions?.includes('approve')
+  const canExport = user?.permissions?.includes('export')
+  const canAudit = user?.permissions?.includes('audit')
+
+  // Brands visible to this user
+  const visibleBrands = useMemo(() => {
+    if (!user?.brands) return BRANDS
+    return BRANDS.filter(b => user.brands.includes(b.id))
+  }, [user])
+
+  // ── Auth helpers ──
+
+  const authFetch = useCallback((url, options = {}) => {
+    const token = authToken || sessionStorage.getItem('ynk_token')
+    if (token) {
+      options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` }
+    }
+    return fetch(url, options).then(r => {
+      if (r.status === 401) {
+        sessionStorage.removeItem('ynk_token')
+        setAuthToken('')
+        setUser(null)
+      }
+      return r
+    })
+  }, [authToken])
+
+  const fetchUser = useCallback((token) => {
+    fetch('/auth/me', { headers: { 'Authorization': `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(u => setUser(u))
+      .catch(() => {
+        sessionStorage.removeItem('ynk_token')
+        setAuthToken('')
+      })
+  }, [])
+
+  // Fetch auth config on mount
+  useEffect(() => {
+    fetch('/auth/config')
+      .then(r => r.json())
+      .then(cfg => {
+        setAuthConfig(cfg)
+        if (!cfg.required) {
+          setUser({ email: 'dev@local', name: 'Developer', picture: '', role: 'admin',
+                    permissions: ['approve', 'audit', 'export', 'manage', 'read'], brands: null })
+        } else {
+          const saved = sessionStorage.getItem('ynk_token')
+          if (saved) fetchUser(saved)
+        }
+      })
+      .catch(() => setAuthConfig({ required: false, client_id: '' }))
+  }, [fetchUser])
+
+  const handleLogin = useCallback((credential) => {
+    sessionStorage.setItem('ynk_token', credential)
+    setAuthToken(credential)
+    fetchUser(credential)
+  }, [fetchUser])
+
+  const handleSignOut = useCallback(() => {
+    sessionStorage.removeItem('ynk_token')
+    setAuthToken('')
+    setUser(null)
+    if (window.google?.accounts?.id) google.accounts.id.disableAutoSelect()
+  }, [])
+
+  const showToast = useCallback((msg, type = 'info') => {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3500)
+  }, [])
+
+  // ── Data loading ──
 
   const loadBrand = useCallback((b) => {
     setLoading(true)
     setError(null)
     setActions([])
     setDecisions({})
+    setAuditLog([])
     setSearch('')
     setFilterStore('all')
     setFilterUrgency('all')
@@ -373,24 +590,37 @@ function App() {
     setBrand(b)
 
     Promise.all([
-      fetch(b.endpoint).then(r => r.json()),
-      fetch(`/alerts?brand=${b.id}&min_attrition=0.3`).then(r => r.json()),
-      fetch(`/model/info?brand=${b.id}`).then(r => r.json()),
-    ]).then(([ad, al, mi]) => {
+      authFetch(b.endpoint).then(r => r.json()),
+      authFetch(`/alerts?brand=${b.id}&min_attrition=0.3`).then(r => r.json()),
+      authFetch(`/model/info?brand=${b.id}`).then(r => r.json()),
+      authFetch(`/decisions?brand=${b.id}`).then(r => r.json()),
+      canAudit ? authFetch(`/audit?brand=${b.id}&limit=50`).then(r => r.json()).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      authFetch(`/feedback?brand=${b.id}`).then(r => r.json()).catch(() => ({ items: {} })),
+    ]).then(([ad, al, mi, dec, aud, fb]) => {
       setActions(ad.items || [])
       setAlerts(al.items || [])
       setInfo(mi)
+      setWeek(ad.week || '')
+      setAuditLog(aud.items || [])
+      setFeedback(fb.items || {})
+      const decMap = {}
+      Object.entries(dec.decisions || {}).forEach(([k, v]) => {
+        decMap[k] = v.status
+      })
+      setDecisions(decMap)
       setLoading(false)
     }).catch(() => {
       setError('No se pudo conectar con la API.')
       setLoading(false)
     })
-  }, [])
+  }, [authFetch, canAudit])
 
   const handleEnter = useCallback(() => {
     setView('dashboard')
-    loadBrand(BRANDS[0])
-  }, [loadBrand])
+    loadBrand(visibleBrands[0] || BRANDS[0])
+  }, [loadBrand, visibleBrands])
+
+  // ── Filters ──
 
   const stores = useMemo(() =>
     [...new Set(actions.map(a => a.store_name || a.store).filter(Boolean))].sort(),
@@ -422,6 +652,8 @@ function App() {
   const increases = useMemo(() => filtered.filter(a => a.action_type === 'increase'), [filtered])
   const decreases = useMemo(() => filtered.filter(a => a.action_type !== 'increase'), [filtered])
 
+  // ── Decisions ──
+
   const setDecision = useCallback((key, status) => {
     setDecisions(prev => {
       const next = { ...prev }
@@ -429,26 +661,80 @@ function App() {
       else next[key] = status
       return next
     })
-  }, [])
+    if (week) {
+      authFetch('/decisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brand: brand.id, week, key, status }),
+      }).then(r => { if (!r.ok) showToast('Error guardando decision', 'error') })
+        .catch(() => showToast('Error de conexion', 'error'))
+    }
+  }, [brand, week, authFetch])
 
   const bulkDecide = useCallback((items, status) => {
+    const keys = items.map(a => `${a.parent_sku}-${a.store}`)
     setDecisions(prev => {
       const next = { ...prev }
-      items.forEach(a => {
-        const k = `${a.parent_sku}-${a.store}`
-        if (!next[k]) next[k] = status
-      })
+      keys.forEach(k => { if (!next[k]) next[k] = status })
       return next
     })
-  }, [])
+    if (week && keys.length > 0) {
+      authFetch('/decisions/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brand: brand.id, week, keys, status }),
+      }).then(r => { if (!r.ok) showToast('Error guardando decisiones', 'error') })
+        .catch(() => showToast('Error de conexion', 'error'))
+    }
+  }, [brand, week, authFetch])
 
   const reviewedCount = Object.keys(decisions).length
   const approvedItems = actions.filter(a => decisions[`${a.parent_sku}-${a.store}`] === 'approved')
   const approvedImpact = approvedItems.reduce((s, a) => s + (Number(a.rev_delta) || 0), 0)
 
-  const handleExport = () => {
-    exportCSV(approvedItems, `acciones_aprobadas_${brand.id}_${new Date().toISOString().slice(0, 10)}.csv`)
+  // ── Export ──
+
+  const rejectedCount = actions.filter(a => decisions[`${a.parent_sku}-${a.store}`] === 'rejected').length
+  const undecidedCount = actions.length - reviewedCount
+
+  const doExportExcel = () => {
+    setShowExportConfirm(false)
+    authFetch(`/export/price-changes?brand=${brand.id}`)
+      .then(r => {
+        if (!r.ok) throw new Error('Export failed')
+        return r.blob()
+      })
+      .then(blob => {
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = `cambios_precio_${brand.id}_${week}.xlsx`
+        a.click()
+        URL.revokeObjectURL(a.href)
+        showToast(`Excel exportado: ${approvedItems.length} acciones`, 'ok')
+      })
+      .catch(() => showToast('Error generando export', 'error'))
   }
+
+  const doExportText = () => {
+    setShowExportConfirm(false)
+    authFetch(`/export/price-changes?brand=${brand.id}&format=text`)
+      .then(r => {
+        if (!r.ok) return r.text().then(t => { throw new Error(t) })
+        return r.text()
+      })
+      .then(text => {
+        navigator.clipboard.writeText(text)
+        showToast('Texto copiado al portapapeles', 'ok')
+      })
+      .catch(e => showToast(e.message || 'Error', 'error'))
+  }
+
+  // ── Auth gate ──
+
+  if (!authConfig) return <div className="loading-screen"><div className="spinner" /><span>Cargando...</span></div>
+  if (authConfig.required && !user) return <LoginScreen clientId={authConfig.client_id} onLogin={handleLogin} />
+
+  // ── Render ──
 
   if (view === 'landing') return <LandingPage onEnter={handleEnter} />
 
@@ -463,7 +749,7 @@ function App() {
             YNK<span className="logo-dot">.</span>pricing
           </button>
           <nav className="brand-tabs">
-            {BRANDS.map(b => (
+            {visibleBrands.map(b => (
               <button
                 key={b.id}
                 className={`brand-tab ${b.id === brand.id ? 'brand-tab--active' : ''}`}
@@ -477,8 +763,28 @@ function App() {
         <div className="header-meta">
           {info && <span className="meta-tag">v{info.version} AUC {info.classifier?.avg_auc?.toFixed(3)}</span>}
           <span className="meta-tag">{actions.length} acciones</span>
+          {user && (
+            <div className="header-user">
+              {user.picture && <img src={user.picture} className="user-avatar" alt="" referrerPolicy="no-referrer" />}
+              <span className="user-name">{user.name}</span>
+              <span className="role-tag">{user.role}</span>
+              {user.permissions?.includes('manage') && (
+                <button className="btn-signout" onClick={() => setShowAdmin(true)} title="Administrar usuarios"><Settings size={14} /></button>
+              )}
+              {authConfig.required && (
+                <button className="btn-signout" onClick={handleSignOut} title="Cerrar sesion"><LogOut size={14} /></button>
+              )}
+            </div>
+          )}
         </div>
       </header>
+
+      {week && (
+        <div className="freshness-banner">
+          Datos: Semana del {week}
+          {undecidedCount > 0 && <span className="freshness-pending"> — {undecidedCount} acciones sin revisar</span>}
+        </div>
+      )}
 
       <div className="stats-row">
         <div className="kpi">
@@ -540,10 +846,14 @@ function App() {
         </div>
         <div className="toolbar-actions">
           <span className="result-count">{filtered.length} resultados</span>
-          <button className="tbtn tbtn--approve" onClick={() => bulkDecide(filtered, 'approved')}><Check size={13} /> Aprobar filtradas</button>
-          <button className="tbtn tbtn--reject" onClick={() => bulkDecide(filtered, 'rejected')}><X size={13} /> Rechazar filtradas</button>
-          {approvedItems.length > 0 && (
-            <button className="tbtn tbtn--export" onClick={handleExport}><Download size={13} /> Exportar ({approvedItems.length})</button>
+          {canApprove && (
+            <>
+              <button className="tbtn tbtn--approve" onClick={() => bulkDecide(filtered, 'approved')}><Check size={13} /> Aprobar filtradas</button>
+              <button className="tbtn tbtn--reject" onClick={() => bulkDecide(filtered, 'rejected')}><X size={13} /> Rechazar filtradas</button>
+            </>
+          )}
+          {canExport && approvedItems.length > 0 && (
+            <button className="tbtn tbtn--export" onClick={() => setShowExportConfirm(true)}><Download size={13} /> Exportar ({approvedItems.length})</button>
           )}
         </div>
       </div>
@@ -554,7 +864,7 @@ function App() {
           <div className="list">
             {increases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} />
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} canApprove={canApprove} feedback={feedback[k]} />
             })}
           </div>
         </section>
@@ -566,7 +876,7 @@ function App() {
           <div className="list">
             {decreases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} />
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} canApprove={canApprove} feedback={feedback[k]} />
             })}
           </div>
         </section>
@@ -589,6 +899,46 @@ function App() {
           </div>
         </section>
       )}
+
+      {canAudit && auditLog.length > 0 && (
+        <section className="section section--audit">
+          <div className="section-header"><Clock size={16} /><h2>Historial de cambios</h2></div>
+          <div className="audit-list">
+            {auditLog.slice(0, 30).map((e, i) => (
+              <div key={i} className="audit-entry">
+                <span className="audit-time">{new Date(e.timestamp).toLocaleString('es-CL', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="audit-user">{e.user_name || e.user_email}</span>
+                <span className={`audit-action audit-action--${e.action}`}>{e.action}</span>
+                <span className="audit-detail">{e.key || (e.count ? `${e.count} items` : '')}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {showAdmin && <AdminPanel authFetch={authFetch} onClose={() => setShowAdmin(false)} />}
+
+      {showExportConfirm && (
+        <div className="admin-overlay" onClick={() => setShowExportConfirm(false)}>
+          <div className="export-dialog" onClick={e => e.stopPropagation()}>
+            <h3>Exportar cambios de precio</h3>
+            <p className="export-brand">{brand.label} — Semana {week}</p>
+            <div className="export-summary">
+              <div className="export-stat export-stat--ok"><Check size={14} /> {approvedItems.length} aprobadas</div>
+              <div className="export-stat export-stat--no"><X size={14} /> {rejectedCount} rechazadas</div>
+              {undecidedCount > 0 && <div className="export-stat export-stat--warn"><AlertTriangle size={14} /> {undecidedCount} sin revisar (no se exportan)</div>}
+            </div>
+            <div className="export-impact">Impacto estimado: {approvedImpact >= 0 ? '+' : ''}{clpCompact(approvedImpact)}/semana</div>
+            <div className="export-buttons">
+              <button className="tbtn tbtn--export" onClick={doExportExcel}><Download size={13} /> Descargar Excel</button>
+              <button className="tbtn tbtn--copy" onClick={doExportText}><ClipboardCopy size={13} /> Copiar texto</button>
+              <button className="tbtn" onClick={() => setShowExportConfirm(false)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && <div className={`toast toast--${toast.type}`}>{toast.msg}</div>}
     </div>
   )
 }
