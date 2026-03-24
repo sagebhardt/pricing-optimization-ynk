@@ -55,7 +55,7 @@ config/database.py              # DB config (credentials via .env), brand config
 | Brand | Banner | Brand Codes | Active Stores | Foot Traffic | Classifier AUC | Depth R2 |
 |-------|--------|-------------|---------------|-------------|----------------|----------|
 | HOKA | HOKA | HK | 3 | Yes (2) | 0.949 | — |
-| BOLD | BOLD | NI,PM,AD,JR,NB,VN,NE,NP,CV,CAH | All | Yes (30) | — | — |
+| BOLD | BOLD | NI,PM,AD,JR,NB,VN,NE,NP,CV,CAH | All | Yes (30) | 0.910 | 0.566 |
 | BAMERS | BAMERS | BM,SK,CR,CAB | 25 | Yes (30) | 0.949 | 0.485 |
 | OAKLEY | OAKLEY | OK | 8 | Yes (7) | 0.945 | 0.739 |
 
@@ -69,7 +69,7 @@ config/database.py              # DB config (credentials via .env), brand config
 
 ## Key Conventions
 - Brand names are UPPERCASE in code, lowercase in directory paths
-- All prices in CLP, ending in ,990 (Chilean retail convention)
+- All prices in CLP, snapped to cognitive price anchors (e.g. 9,990 / 14,990 / 19,990 / 24,990 / 29,990 / 39,990 / 49,990 / 59,990 / 69,990 / 79,990 / 99,990) — see `PRICE_ANCHORS` in `weekly_pricing_brand.py`
 - Discount ladder: 0% → 15% → 20% → 30% → 40%
 - Models trained at parent SKU level (not individual sizes)
 - Time-series cross-validation (never random splits)
@@ -89,8 +89,13 @@ config/database.py              # DB config (credentials via .env), brand config
 - Script: `run_weekly.sh` — extracts, aggregates, trains, generates pricing for all brands, then deploys
 - Logs: `logs/` directory
 
+## Stock Data
+- Stock tables live in `consultas.public.stock_{brand}` (e.g. `stock_bold`, `stock_hoka`, `stock_bamers`, `stock_oakley`)
+- Extracted to `data/raw/{brand}/stock.parquet`
+- BOLD: 63.7M rows (Jan 2024 – Mar 2026)
+- When extracting large stock tables, use monthly batch queries to avoid timeouts
+
 ## Missing Data (Waiting on Jacques)
-- `ynk.stock` — daily inventory snapshots (blocks weeks-of-cover feature)
 - `ynk.costos` — unit costs (blocks margin-based optimization)
 - `ynk.precios_ofertas` — pricing history (blocks clean markdown event detection)
 - See `DATA_BRIEF.md` Section 4 for the full request with all brands' store lists
