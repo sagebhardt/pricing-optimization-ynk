@@ -129,6 +129,7 @@ def extract_brand(brand_name: str):
                 print(f"  Stores: {stock['store_id'].nunique()}")
         except Exception as e:
             print(f"  Stock table {stock_table} not available — skipping ({e})")
+            conn.rollback()
     else:
         print(f"No stock table configured for {brand_name} — skipping")
 
