@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -25,7 +26,52 @@ from src.features.aggregate_parent import aggregate_to_parent
 from src.models.train_brand import train_brand_models
 from src.models.weekly_pricing_brand import generate_weekly_actions_for_brand
 
-ALL_STEPS = ["extract", "features", "elasticity", "lifecycle", "size_curve", "enhance", "aggregate", "train", "pricing"]
+ALL_STEPS = ["extract", "features", "elasticity", "lifecycle", "size_curve", "enhance", "aggregate", "train", "pricing", "sync"]
+
+PROJECT_ROOT = Path(__file__).parent
+
+
+def sync_to_gcs(brand: str):
+    """Upload pipeline outputs to GCS so the API can serve them without redeploy."""
+    bucket_name = os.getenv("GCS_BUCKET", "")
+    if not bucket_name:
+        print("  GCS_BUCKET not set — skipping sync")
+        return
+
+    from google.cloud import storage
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    brand_lower = brand.lower()
+    uploaded = 0
+
+    def _upload(local_path, gcs_path):
+        nonlocal uploaded
+        try:
+            blob = bucket.blob(gcs_path)
+            blob.upload_from_filename(str(local_path))
+            uploaded += 1
+            print(f"  -> gs://{bucket_name}/{gcs_path}")
+        except Exception as e:
+            print(f"  WARN: failed to upload {gcs_path}: {e}")
+
+    # 1. Weekly actions — latest CSV only
+    actions_dir = PROJECT_ROOT / "weekly_actions" / brand_lower
+    csvs = sorted(actions_dir.glob("pricing_actions_*.csv"))
+    if csvs:
+        latest = csvs[-1]
+        _upload(latest, f"weekly_actions/{brand_lower}/{latest.name}")
+
+    # 2. Size curve alerts
+    alerts_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "size_curve_alerts.parquet"
+    if alerts_path.exists():
+        _upload(alerts_path, f"alerts/{brand_lower}/size_curve_alerts.parquet")
+
+    # 3. Training metadata
+    meta_path = PROJECT_ROOT / "models" / brand_lower / "training_metadata.json"
+    if meta_path.exists():
+        _upload(meta_path, f"models/{brand_lower}/training_metadata.json")
+
+    print(f"  Synced {uploaded} files to GCS")
 
 
 def main():
@@ -53,6 +99,7 @@ def main():
         "aggregate": lambda: aggregate_to_parent(brand),
         "train": lambda: train_brand_models(brand),
         "pricing": lambda: generate_weekly_actions_for_brand(brand, target_week=args.week),
+        "sync": lambda: sync_to_gcs(brand),
     }
 
     for step in args.steps:
