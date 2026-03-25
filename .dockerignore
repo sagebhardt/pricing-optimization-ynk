@@ -22,6 +22,7 @@ reports/
 src/
 run_brand.py
 run_weekly.sh
+run_pipeline_job.py
 
 # Dev/build artifacts
 .git/
