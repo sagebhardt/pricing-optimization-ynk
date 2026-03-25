@@ -539,7 +539,14 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         if current_idx <= 0:
             continue
         recommended_step = DISCOUNT_STEPS[current_idx - 1]
-        recommended_price = snap_to_price_anchor(list_price * (1 - recommended_step), direction="up")
+        raw_rec = list_price * (1 - recommended_step)
+        recommended_price = snap_to_price_anchor(raw_rec, direction="up")
+        list_price_anchor = snap_to_price_anchor(list_price, direction="nearest")
+
+        # If snap pushed above list price, only allow if velocity justifies premium
+        is_premium = recommended_price > list_price_anchor
+        if is_premium and velocity < 2.0:
+            recommended_price = list_price_anchor
         current_final_rounded = snap_to_price_anchor(final_price, direction="nearest") if pd.notna(final_price) else 0
 
         if recommended_price <= current_final_rounded + 2000:
@@ -559,11 +566,16 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         current_weekly_rev = velocity * current_final_rounded
         expected_weekly_rev = expected_velocity * recommended_price
 
-        confidence_tier = compute_confidence_tier(
-            row["markdown_probability"], velocity, age, has_elast, "increase"
-        )
+        if is_premium:
+            confidence_tier = "SPECULATIVE"
+        else:
+            confidence_tier = compute_confidence_tier(
+                row["markdown_probability"], velocity, age, has_elast, "increase"
+            )
 
         reasons = [f"Selling {velocity:.1f} u/sem at {current_step:.0%} off -- test higher price"]
+        if is_premium:
+            reasons.append(f"PREMIUM: above list price ({list_price_anchor:,.0f} -> {recommended_price:,.0f})")
         if not has_elast:
             reasons.append("Sin elasticidad — volumen estimado")
         if vel_trend > 1.1:
