@@ -1,0 +1,47 @@
+# Raw data (never needed by API)
+data/raw/
+
+# Processed features (pipeline-only, API only needs alerts)
+data/processed/*/features*.parquet
+data/processed/*/lifecycle*.parquet
+data/processed/*/size_curve_tracking*.parquet
+data/processed/*/elasticity*.parquet
+data/processed/hoka_features*.parquet
+
+# Model pickle files (pipeline-only, API only needs training_metadata.json)
+models/*/*.pkl
+models/*/classifier_shap.csv
+models/*/regressor_shap.csv
+
+# Other non-API directories
+notebooks/
+logs/
+reports/
+
+# Pipeline code (not needed by API)
+src/
+run_brand.py
+run_weekly.sh
+
+# Dev/build artifacts
+.git/
+.gitignore
+.env
+*.pyc
+__pycache__/
+node_modules/
+dashboard/node_modules/
+dashboard/src/
+dashboard/index.html
+dashboard/package*.json
+dashboard/vite.config.js
+dashboard/eslint.config.js
+
+# Docs
+*.md
+DATA_BRIEF.md
+CLAUDE.md
+
+# IDE
+.vscode/
+.idea/

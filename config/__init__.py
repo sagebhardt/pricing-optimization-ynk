@@ -1,1 +1,3 @@
-from config.database import DB_CONFIG, HOKA_STORES, HOKA_BANNER, HOKA_BRAND_CODE, EXCLUDE_SKUS
+# config package
+# database.py is imported by the pipeline (run_brand.py), not by the API
+# auth.py is imported by the API middleware
