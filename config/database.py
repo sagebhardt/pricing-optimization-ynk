@@ -29,6 +29,7 @@ EXCLUDE_STORES_PRICING = [
     "170",    # Bamers Digital
     "508",    # Bamers Digital II
     "D005",   # Oakley Ventas Internas
+    "AB10",   # Belsport E-commerce / Digital
 ]
 
 # Brand configurations
@@ -64,6 +65,16 @@ BRANDS = {
         ],
         "stores_all": None,
     },
+    # Brand codes overlap with BOLD/BAMERS (NI, PM, AD, etc.) — this is fine
+    # because extract_brand.py filters by banner name, not just brand codes.
+    "BELSPORT": {
+        "banner": "BELSPORT",
+        "brand_codes": ["PM", "NI", "AD", "SK", "RB", "VN", "AL", "CV", "LT",
+                         "SH", "UM", "CR", "NB", "QS", "BM", "MN", "UA", "ML",
+                         "NP", "SC", "BL", "KP"],
+        "stores_active": None,  # All stores
+        "stores_all": None,
+    },
 }
 
 # Stock table locations (team uploads may land in different schemas/tables)
@@ -72,6 +83,7 @@ STOCK_TABLES = {
     "BOLD": "public.stock_bold",
     "BAMERS": "public.stock_bamers",
     "OAKLEY": "public.stock_oakley",
+    "BELSPORT": "public.stock_belsport",
 }
 
 # Backwards compatibility

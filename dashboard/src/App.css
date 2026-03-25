@@ -239,6 +239,13 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .admin-domains { font-size: 12px; color: var(--slate-500); display: flex; gap: 6px; }
 .admin-domains-label { font-weight: 500; }
 
+/* ── Pagination ── */
+.pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0; }
+.pagination button { font-family: var(--font-body); font-size: 12px; font-weight: 600; padding: 6px 14px; border: 1px solid var(--slate-200); border-radius: var(--radius); background: #fff; color: var(--slate-600); cursor: pointer; }
+.pagination button:hover:not(:disabled) { background: var(--slate-50); border-color: var(--slate-300); }
+.pagination button:disabled { opacity: .4; cursor: not-allowed; }
+.page-info { font-size: 12px; color: var(--slate-500); }
+
 /* ── Confidence Tier & Feedback Badges ── */
 .tier-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
 .tier-badge--high { background: var(--green-100); color: var(--green-700); }
@@ -287,6 +294,8 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
   .toolbar-actions { flex-wrap: wrap; justify-content: flex-end; }
   .row-main { grid-template-columns: 55px 1fr 50px 20px; font-size: 12px; padding: 6px 8px; }
   .row-delta { display: none; }
+  .pagination { flex-wrap: wrap; gap: 8px; }
+  .page-info { width: 100%; text-align: center; order: -1; font-size: 11px; }
   .detail-cells { grid-template-columns: repeat(2, 1fr); }
 }
 

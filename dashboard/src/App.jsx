@@ -7,6 +7,7 @@ const BRANDS = [
   { id: 'bold',   label: 'BOLD',   endpoint: '/pricing-actions?brand=bold' },
   { id: 'bamers', label: 'BAMERS', endpoint: '/pricing-actions?brand=bamers' },
   { id: 'oakley', label: 'OAKLEY', endpoint: '/pricing-actions?brand=oakley' },
+  { id: 'belsport', label: 'BELSPORT', endpoint: '/pricing-actions?brand=belsport' },
 ]
 
 const BRAND_STATS = [
@@ -14,6 +15,7 @@ const BRAND_STATS = [
   { id: 'bold',   label: 'BOLD',   actions: 1777,  skus: '57K', stores: 35 },
   { id: 'bamers', label: 'BAMERS', actions: 651,   skus: '9K',  stores: 25 },
   { id: 'oakley', label: 'OAKLEY', actions: 292,   skus: '5K',  stores: 8  },
+  { id: 'belsport', label: 'BELSPORT', actions: 0, skus: '47K', stores: 66 },
 ]
 
 function clp(n) {
@@ -361,7 +363,7 @@ function ActionRow({ action, status, onDecide, canApprove, feedback }) {
 
 // ── Admin Panel ───────────────────────────────────────────────────────────────
 
-const ALL_BRANDS = ['hoka', 'bold', 'bamers', 'oakley']
+const ALL_BRANDS = ['hoka', 'bold', 'bamers', 'oakley', 'belsport']
 
 function AdminPanel({ authFetch, onClose }) {
   const [cfg, setCfg] = useState(null)
@@ -501,6 +503,10 @@ function App() {
   const [showAdmin, setShowAdmin] = useState(false)
   const [showExportConfirm, setShowExportConfirm] = useState(false)
   const [toast, setToast] = useState(null)
+  const [filterStatus, setFilterStatus] = useState('all')  // all | pending | approved | rejected
+  const [sortBy, setSortBy] = useState('urgency')           // urgency | revenue | confidence | store
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 50
 
   // Permissions
   const canApprove = user?.permissions?.includes('approve')
@@ -587,6 +593,9 @@ function App() {
     setFilterStore('all')
     setFilterUrgency('all')
     setFilterCategory('all')
+    setFilterStatus('all')
+    setSortBy('urgency')
+    setPage(1)
     setBrand(b)
 
     Promise.all([
@@ -633,13 +642,17 @@ function App() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
-    return actions.filter(a => {
+    let result = actions.filter(a => {
       if (filterStore !== 'all' && (a.store_name || a.store) !== filterStore) return false
       if (filterUrgency !== 'all') {
         if (filterUrgency === 'INCREASE' && a.action_type !== 'increase') return false
         if (filterUrgency !== 'INCREASE' && (a.urgency !== filterUrgency || a.action_type === 'increase')) return false
       }
       if (filterCategory !== 'all' && a.subcategory !== filterCategory) return false
+      if (filterStatus !== 'all') {
+        const status = decisions[`${a.parent_sku}-${a.store}`] || 'pending'
+        if (filterStatus !== status) return false
+      }
       if (q && !(
         (a.parent_sku || '').toLowerCase().includes(q) ||
         (a.product || '').toLowerCase().includes(q) ||
@@ -647,10 +660,26 @@ function App() {
       )) return false
       return true
     })
-  }, [actions, filterStore, filterUrgency, filterCategory, search])
 
-  const increases = useMemo(() => filtered.filter(a => a.action_type === 'increase'), [filtered])
-  const decreases = useMemo(() => filtered.filter(a => a.action_type !== 'increase'), [filtered])
+    // Sort
+    const urgencyOrder = { 'INCREASE': -1, 'HIGH': 0, 'MEDIUM': 1, 'LOW': 2 }
+    if (sortBy === 'urgency') {
+      result.sort((a, b) => (urgencyOrder[a.urgency] ?? 3) - (urgencyOrder[b.urgency] ?? 3) || (Number(b.rev_delta) || 0) - (Number(a.rev_delta) || 0))
+    } else if (sortBy === 'revenue') {
+      result.sort((a, b) => Math.abs(Number(b.rev_delta) || 0) - Math.abs(Number(a.rev_delta) || 0))
+    } else if (sortBy === 'confidence') {
+      result.sort((a, b) => (Number(b.model_confidence) || 0) - (Number(a.model_confidence) || 0))
+    } else if (sortBy === 'store') {
+      result.sort((a, b) => (a.store_name || a.store || '').localeCompare(b.store_name || b.store || ''))
+    }
+    return result
+  }, [actions, filterStore, filterUrgency, filterCategory, filterStatus, search, sortBy, decisions])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  useEffect(() => { if (page > totalPages) setPage(totalPages) }, [totalPages])
+  const paged = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page])
+  const increases = useMemo(() => paged.filter(a => a.action_type === 'increase'), [paged])
+  const decreases = useMemo(() => paged.filter(a => a.action_type !== 'increase'), [paged])
 
   // ── Decisions ──
 
@@ -822,15 +851,21 @@ function App() {
       <div className="toolbar">
         <div className="search-box">
           <Search size={15} />
-          <input type="text" placeholder="Buscar SKU o producto..." value={search} onChange={e => setSearch(e.target.value)} />
+          <input type="text" placeholder="Buscar SKU o producto..." value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} />
         </div>
         <div className="filter-group">
           <Filter size={14} />
-          <select value={filterStore} onChange={e => setFilterStore(e.target.value)}>
+          <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1) }}>
+            <option value="all">Todo estado</option>
+            <option value="pending">Sin revisar</option>
+            <option value="approved">Aprobadas</option>
+            <option value="rejected">Rechazadas</option>
+          </select>
+          <select value={filterStore} onChange={e => { setFilterStore(e.target.value); setPage(1) }}>
             <option value="all">Todas las tiendas</option>
             {stores.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select value={filterUrgency} onChange={e => setFilterUrgency(e.target.value)}>
+          <select value={filterUrgency} onChange={e => { setFilterUrgency(e.target.value); setPage(1) }}>
             <option value="all">Toda urgencia</option>
             <option value="INCREASE">Subir precio</option>
             <option value="HIGH">Alta</option>
@@ -838,25 +873,48 @@ function App() {
             <option value="LOW">Baja</option>
           </select>
           {categories.length > 1 && (
-            <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+            <select value={filterCategory} onChange={e => { setFilterCategory(e.target.value); setPage(1) }}>
               <option value="all">Toda categoria</option>
               {categories.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           )}
+          <select value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(1) }}>
+            <option value="urgency">Ordenar: Urgencia</option>
+            <option value="revenue">Ordenar: Impacto</option>
+            <option value="confidence">Ordenar: Confianza</option>
+            <option value="store">Ordenar: Tienda</option>
+          </select>
         </div>
         <div className="toolbar-actions">
           <span className="result-count">{filtered.length} resultados</span>
-          {canApprove && (
-            <>
-              <button className="tbtn tbtn--approve" onClick={() => bulkDecide(filtered, 'approved')}><Check size={13} /> Aprobar filtradas</button>
-              <button className="tbtn tbtn--reject" onClick={() => bulkDecide(filtered, 'rejected')}><X size={13} /> Rechazar filtradas</button>
-            </>
-          )}
+          {canApprove && (() => {
+            const pendingInFilter = filtered.filter(a => !decisions[`${a.parent_sku}-${a.store}`]).length
+            return pendingInFilter > 0 && (
+              <>
+                <button className="tbtn tbtn--approve" onClick={() => {
+                  if (pendingInFilter > 100 && !confirm(`Aprobar ${pendingInFilter} acciones pendientes?`)) return
+                  bulkDecide(filtered, 'approved')
+                }}><Check size={13} /> Aprobar ({pendingInFilter})</button>
+                <button className="tbtn tbtn--reject" onClick={() => {
+                  if (pendingInFilter > 100 && !confirm(`Rechazar ${pendingInFilter} acciones pendientes?`)) return
+                  bulkDecide(filtered, 'rejected')
+                }}><X size={13} /> Rechazar ({pendingInFilter})</button>
+              </>
+            )
+          })()}
           {canExport && approvedItems.length > 0 && (
             <button className="tbtn tbtn--export" onClick={() => setShowExportConfirm(true)}><Download size={13} /> Exportar ({approvedItems.length})</button>
           )}
         </div>
       </div>
+
+      {totalPages > 1 && (
+        <div className="pagination">
+          <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>&laquo; Anterior</button>
+          <span className="page-info">Pagina {page} de {totalPages} ({filtered.length} acciones)</span>
+          <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Siguiente &raquo;</button>
+        </div>
+      )}
 
       {increases.length > 0 && (
         <section className="section section--increases">
@@ -883,6 +941,14 @@ function App() {
       )}
 
       {filtered.length === 0 && <div className="empty-state">No hay acciones con estos filtros</div>}
+
+      {totalPages > 1 && (
+        <div className="pagination">
+          <button disabled={page <= 1} onClick={() => { setPage(p => p - 1); window.scrollTo(0, 0) }}>&laquo; Anterior</button>
+          <span className="page-info">Pagina {page} de {totalPages}</span>
+          <button disabled={page >= totalPages} onClick={() => { setPage(p => p + 1); window.scrollTo(0, 0) }}>Siguiente &raquo;</button>
+        </div>
+      )}
 
       {alerts.length > 0 && (
         <section className="section section--alerts">
