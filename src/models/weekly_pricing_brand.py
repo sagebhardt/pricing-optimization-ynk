@@ -544,8 +544,8 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         list_price_anchor = snap_to_price_anchor(list_price, direction="nearest")
 
         # If snap pushed above list price, only allow if velocity justifies premium
-        is_premium = recommended_price > list_price_anchor
-        if is_premium and velocity < 2.0:
+        is_premium = recommended_price > list_price
+        if is_premium and (pd.isna(velocity) or velocity < 2.0):
             recommended_price = list_price_anchor
         current_final_rounded = snap_to_price_anchor(final_price, direction="nearest") if pd.notna(final_price) else 0
 

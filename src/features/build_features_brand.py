@@ -467,6 +467,7 @@ def build_features_for_brand(brand: str):
     official_path = _raw_dir(brand) / "official_prices.parquet"
     if official_path.exists():
         official = pd.read_parquet(official_path)
+        official = official[official["list_price"] > 0].dropna(subset=["list_price"])
         price_map = official.set_index("sku")["list_price"].to_dict()
 
         # Try direct match first, then prefix match (official SKUs may be parent-level)
