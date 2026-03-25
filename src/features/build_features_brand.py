@@ -463,6 +463,29 @@ def build_features_for_brand(brand: str):
     weekly = build_weekly_sales(txn)
     print(f"  {len(weekly):,} SKU-store-week rows")
 
+    # Override list prices with official price list when available
+    official_path = _raw_dir(brand) / "official_prices.parquet"
+    if official_path.exists():
+        official = pd.read_parquet(official_path)
+        price_map = official.set_index("sku")["list_price"].to_dict()
+
+        # Try direct match first, then prefix match (official SKUs may be parent-level)
+        direct = weekly["sku"].map(price_map)
+        if direct.notna().sum() == 0 and len(price_map) > 0:
+            # Prefix match: child SKU starts with official parent SKU
+            def _prefix_lookup(child_sku):
+                for parent_sku, price in price_map.items():
+                    if child_sku.startswith(parent_sku):
+                        return price
+                return None
+            direct = weekly["sku"].map(_prefix_lookup)
+
+        matched = direct.notna().sum()
+        weekly["avg_precio_lista"] = direct.fillna(weekly["avg_precio_lista"])
+        print(f"[{brand}] Official prices: {len(price_map)} SKUs, applied to {matched:,} rows ({matched/len(weekly)*100:.0f}%)")
+    else:
+        print(f"[{brand}] No official price list — using transaction-derived list prices")
+
     print(f"[{brand}] Adding velocity features...")
     weekly = add_velocity_features(weekly)
 
