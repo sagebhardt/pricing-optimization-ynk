@@ -472,11 +472,12 @@ def build_features_for_brand(brand: str):
         # Try direct match first, then prefix match (official SKUs may be parent-level)
         direct = weekly["sku"].map(price_map)
         if direct.notna().sum() == 0 and len(price_map) > 0:
-            # Prefix match: child SKU starts with official parent SKU
+            # Prefix match: longest matching official SKU wins
+            sorted_keys = sorted(price_map.keys(), key=len, reverse=True)
             def _prefix_lookup(child_sku):
-                for parent_sku, price in price_map.items():
+                for parent_sku in sorted_keys:
                     if child_sku.startswith(parent_sku):
-                        return price
+                        return price_map[parent_sku]
                 return None
             direct = weekly["sku"].map(_prefix_lookup)
 
