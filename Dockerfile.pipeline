@@ -1,0 +1,30 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# System deps for XGBoost + psycopg2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps (ML + DB + GCS)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt google-cloud-storage>=2.14
+
+# Pipeline code
+COPY run_brand.py .
+COPY run_weekly.sh .
+COPY src/ src/
+COPY config/ config/
+
+# Create directories for pipeline outputs
+RUN mkdir -p data/raw data/processed models weekly_actions logs
+
+# Default: run all brands
+ENV GCS_BUCKET=ynk-pricing-decisions
+ENV PYTHONPATH=/app
+
+COPY run_pipeline_job.py .
+
+# Default: run all brands (override with PIPELINE_BRANDS env var)
+CMD ["python3", "run_pipeline_job.py"]

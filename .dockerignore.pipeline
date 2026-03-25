@@ -1,0 +1,17 @@
+# Pipeline image: include src/ and config/, exclude API and data
+api/
+dashboard/
+data/
+models/
+weekly_actions/
+notebooks/
+logs/
+reports/
+.git/
+.env
+*.pyc
+__pycache__/
+node_modules/
+*.md
+.vscode/
+.idea/
