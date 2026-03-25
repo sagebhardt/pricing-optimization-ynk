@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +24,138 @@ def _get_bucket():
 
 def _use_gcs() -> bool:
     return bool(GCS_BUCKET)
+
+
+# ── In-memory cache (TTL-based) ──────────────────────────────────────────────
+
+_cache = {}
+CACHE_TTL = 300  # 5 minutes
+
+
+def _cached(key: str, loader, ttl: int = CACHE_TTL):
+    """Return cached value or call loader. Thread-safe enough for single-worker uvicorn."""
+    now = time.time()
+    entry = _cache.get(key)
+    if entry and now - entry["ts"] < ttl:
+        return entry["val"]
+    val = loader()
+    _cache[key] = {"val": val, "ts": now}
+    return val
+
+
+def cache_clear(prefix: str = ""):
+    """Clear cache entries matching prefix."""
+    keys = [k for k in _cache if k.startswith(prefix)]
+    for k in keys:
+        _cache.pop(k, None)
+
+
+# ── Pricing actions (read-only, written by pipeline) ──────────────────────────
+
+def load_pricing_actions(brand: str) -> dict:
+    """Load latest pricing actions CSV. Returns {week, total, items}."""
+    return _cached(f"actions:{brand}", lambda: _load_pricing_actions_impl(brand))
+
+
+def _load_pricing_actions_impl(brand: str) -> dict:
+    import pandas as pd
+
+    # Try GCS first
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            prefix = f"weekly_actions/{brand.lower()}/pricing_actions_"
+            blobs = sorted([b for b in bucket.list_blobs(prefix=prefix)], key=lambda b: b.name)
+            if blobs:
+                import io
+                content = blobs[-1].download_as_text()
+                df = pd.read_csv(io.StringIO(content)).fillna("")
+                week = blobs[-1].name.split("pricing_actions_")[1].replace(".csv", "")
+                return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
+        except Exception:
+            pass  # fall through to local
+
+    # Local fallback
+    actions_dir = _BASE_DIR / "weekly_actions" / brand.lower()
+    try:
+        files = sorted(actions_dir.glob("pricing_actions_*.csv"))
+        if not files:
+            return {"items": [], "week": None, "total": 0}
+        df = pd.read_csv(files[-1]).fillna("")
+        week = files[-1].stem.replace("pricing_actions_", "")
+        return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
+    except Exception:
+        return {"items": [], "week": None, "total": 0}
+
+
+# ── Alerts (read-only, written by pipeline) ───────────────────────────────────
+
+def load_alerts() -> "pd.DataFrame":
+    """Load size curve alerts for all brands."""
+    return _cached("alerts:all", _load_alerts_impl, ttl=600)
+
+
+def _load_alerts_impl():
+    import pandas as pd
+
+    frames = []
+
+    # Try GCS first
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            for blob in bucket.list_blobs(prefix="alerts/"):
+                if blob.name.endswith(".parquet"):
+                    import io
+                    content = blob.download_as_bytes()
+                    df = pd.read_parquet(io.BytesIO(content))
+                    brand = blob.name.split("/")[1]
+                    df["brand"] = brand
+                    frames.append(df)
+            if frames:
+                return pd.concat(frames, ignore_index=True)
+        except Exception:
+            pass  # fall through to local
+
+    # Local fallback
+    processed = _BASE_DIR / "data" / "processed"
+    if processed.exists():
+        for brand_dir in processed.iterdir():
+            if brand_dir.is_dir():
+                ap = brand_dir / "size_curve_alerts.parquet"
+                if ap.exists():
+                    df = pd.read_parquet(ap)
+                    df["brand"] = brand_dir.name
+                    frames.append(df)
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+# ── Model metadata (read-only) ───────────────────────────────────────────────
+
+def load_model_info(brand: str) -> dict:
+    """Load training metadata for a brand."""
+    return _cached(f"model_info:{brand}", lambda: _load_model_info_impl(brand), ttl=600)
+
+
+def _load_model_info_impl(brand: str) -> dict:
+    # Try GCS first
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            blob = bucket.blob(f"models/{brand.lower()}/training_metadata.json")
+            if blob.exists():
+                return json.loads(blob.download_as_text())
+        except Exception:
+            pass
+
+    # Local fallback
+    fp = _BASE_DIR / "models" / brand.lower() / "training_metadata.json"
+    try:
+        with open(fp) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
 
 
 # ── Decisions ─────────────────────────────────────────────────────────────────

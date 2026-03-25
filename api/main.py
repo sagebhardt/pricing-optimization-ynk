@@ -15,7 +15,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 import pandas as pd
-import numpy as np
 import json
 from pathlib import Path
 from datetime import datetime
@@ -89,12 +88,7 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# Paths
 BASE_DIR = Path(__file__).parent.parent
-PROCESSED_DIR = BASE_DIR / "data" / "processed"
-
-# Global state (alerts loaded on startup)
-state = {}
 
 
 
@@ -122,31 +116,16 @@ class FeedbackPayload(BaseModel):
     note: Optional[str] = ""
 
 
-@app.on_event("startup")
-def load_data():
-    """Load size curve alerts on startup (small parquets only)."""
-    alert_frames = []
-    if PROCESSED_DIR.exists():
-        for brand_dir in PROCESSED_DIR.iterdir():
-            if brand_dir.is_dir():
-                alert_path = brand_dir / "size_curve_alerts.parquet"
-                if alert_path.exists():
-                    df = pd.read_parquet(alert_path)
-                    df["brand"] = brand_dir.name
-                    alert_frames.append(df)
-    state["alerts"] = pd.concat(alert_frames, ignore_index=True) if alert_frames else pd.DataFrame()
-    print(f"Startup: loaded {len(state['alerts']):,} alert rows from {len(alert_frames)} brands")
-
-
 @app.get("/health")
 def health():
-    return {"status": "ok", "alerts_loaded": len(state.get("alerts", []))}
+    return {"status": "ok"}
 
 
 @app.get("/alerts")
 def get_size_alerts(brand: Optional[str] = Query(None), min_attrition: float = Query(0.3)):
     """Get size curve depletion alerts. Optionally filter by brand."""
-    alerts = state.get("alerts", pd.DataFrame())
+    from api import storage
+    alerts = storage.load_alerts()
     if len(alerts) == 0:
         return {"alerts": [], "week": None, "total_alerts": 0}
 
@@ -181,12 +160,8 @@ def get_size_alerts(brand: Optional[str] = Query(None), min_attrition: float = Q
 @app.get("/model/info")
 def get_model_info(brand: Optional[str] = Query(None)):
     """Get model metadata and performance metrics per brand."""
-    meta_path = BASE_DIR / "models" / (brand or "hoka").lower() / "training_metadata.json"
-    try:
-        with open(meta_path) as f:
-            meta = json.load(f)
-    except FileNotFoundError:
-        meta = {}
+    from api import storage
+    meta = storage.load_model_info(brand or "hoka")
 
     cls = meta.get("classifier", {})
     reg = meta.get("regressor", {})
@@ -209,22 +184,11 @@ def get_model_info(brand: Optional[str] = Query(None)):
 
 @app.get("/pricing-actions")
 def get_pricing_actions(brand: Optional[str] = Query(None)):
-    """Get the weekly pricing action list (CSV-backed). Optionally filter by brand."""
-    base = BASE_DIR / "weekly_actions"
-    if brand:
-        actions_dir = base / brand.lower()
-    else:
-        actions_dir = base
-    try:
-        files = sorted(actions_dir.glob("pricing_actions_*.csv"))
-        if not files:
-            return {"items": [], "week": None, "total": 0}
-        latest = pd.read_csv(files[-1]).fillna("")
-        week = files[-1].stem.replace("pricing_actions_", "")
-        items = latest.to_dict(orient="records")
-        return {"week": week, "total": len(items), "items": items}
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    """Get the weekly pricing action list."""
+    from api import storage
+    if not brand:
+        return {"items": [], "week": None, "total": 0}
+    return storage.load_pricing_actions(brand)
 
 
 # ── Authentication helpers ────────────────────────────────────────────────────
@@ -499,13 +463,11 @@ def export_price_changes(
         raise HTTPException(403, "Permission 'export' required")
     _check_brand_access(user, brand)
 
-    actions_dir = BASE_DIR / "weekly_actions" / brand.lower()
-    files = sorted(actions_dir.glob("pricing_actions_*.csv"))
-    if not files:
+    ad = storage.load_pricing_actions(brand)
+    if not ad.get("items"):
         raise HTTPException(404, "No pricing actions found")
-
-    df = pd.read_csv(files[-1]).fillna("")
-    week = files[-1].stem.replace("pricing_actions_", "")
+    df = pd.DataFrame(ad["items"])
+    week = ad["week"]
 
     dec_data = storage.load_decisions(brand, week)
     dec_map = dec_data.get("decisions", {})
