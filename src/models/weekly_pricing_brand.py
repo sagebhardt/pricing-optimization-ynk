@@ -368,6 +368,28 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
     except FileNotFoundError:
         elast_map = {}
 
+    # Load costs (prefix match — costs are typically at parent-SKU level)
+    cost_map = {}
+    costs_path = raw / "costs.parquet"
+    if costs_path.exists():
+        costs_df = pd.read_parquet(costs_path)
+        costs_df = costs_df[costs_df["cost"] > 0].dropna(subset=["cost"])
+        cost_map = costs_df.set_index("sku")["cost"].to_dict()
+        print(f"  Costs loaded: {len(cost_map)} SKUs")
+    else:
+        print(f"  No cost data — margin analysis unavailable")
+
+    cost_sorted_keys = sorted(cost_map.keys(), key=len, reverse=True) if cost_map else []
+
+    def _get_cost(sku):
+        """Lookup unit cost by exact or prefix match."""
+        if sku in cost_map:
+            return cost_map[sku]
+        for k in cost_sorted_keys:
+            if sku.startswith(k):
+                return cost_map[k]
+        return None
+
     # Determine target week — use most recent week with sufficient data
     if target_week is None:
         # Count rows per week, pick latest with >= 10 parent-store rows
@@ -585,9 +607,23 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         if n_sell >= n_total * 0.7:
             reasons.append(f"Size curve healthy ({n_sell}/{n_total})")
 
-        # Stock info (if available)
+        # Stock + cost info
         _stock = int(row["stock_on_hand"]) if pd.notna(row.get("stock_on_hand")) else None
         _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
+        unit_cost = _get_cost(row["codigo_padre"])
+
+        # Margin calculations
+        if unit_cost:
+            current_margin_unit = current_final_rounded - unit_cost
+            rec_margin_unit = recommended_price - unit_cost
+            current_margin_weekly = current_margin_unit * velocity
+            expected_margin_weekly = rec_margin_unit * expected_velocity
+            margin_delta = int(expected_margin_weekly - current_margin_weekly)
+            rec_margin_pct = round(rec_margin_unit / recommended_price * 100, 1) if recommended_price > 0 else 0
+            reasons.append(f"Margin recovery: {rec_margin_pct:.0f}% at new price")
+        else:
+            margin_delta = None
+            rec_margin_pct = None
 
         parent_actions.append({
             "parent_sku": row["codigo_padre"],
@@ -611,6 +647,9 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "current_weekly_rev": int(current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
             "expected_weekly_rev": int(expected_weekly_rev),
             "rev_delta": int(expected_weekly_rev - current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
+            "unit_cost": int(unit_cost) if unit_cost else None,
+            "margin_pct": rec_margin_pct,
+            "margin_delta": margin_delta,
             "urgency": "INCREASE",
             "reasons": "; ".join(reasons),
             "model_confidence": round(row["markdown_probability"], 3),
@@ -675,9 +714,44 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         n_sell = int(row["sizes_selling"])
         n_total = int(row["total_sizes_catalog"])
 
-        # Stock info (if available)
+        # Stock + cost info
         _stock = int(row["stock_on_hand"]) if pd.notna(row.get("stock_on_hand")) else None
         _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
+        unit_cost = _get_cost(parent)
+
+        # Margin calculations
+        if unit_cost:
+            # Block below-cost recommendations — step back to a shallower discount
+            if recommended_price < unit_cost:
+                # Find the shallowest discount that stays above cost
+                for step in DISCOUNT_STEPS:
+                    candidate = snap_to_price_anchor(list_price * (1 - step), direction="nearest")
+                    if candidate >= unit_cost:
+                        recommended_step = step
+                        recommended_price = candidate
+                        break
+                else:
+                    continue  # Can't find a price above cost — skip
+
+                if abs(recommended_price - current_final_rounded) < 2000:
+                    continue
+
+                reasons.append(f"Discount capped to protect margin (cost={unit_cost:,.0f})")
+                expected_velocity = compute_expected_velocity(velocity, disc_rate, recommended_step, elasticity)
+                expected_weekly_rev = expected_velocity * recommended_price
+
+            current_margin_unit = current_final_rounded - unit_cost
+            rec_margin_unit = recommended_price - unit_cost
+            current_margin_weekly = current_margin_unit * velocity
+            expected_margin_weekly = rec_margin_unit * expected_velocity
+            margin_delta = int(expected_margin_weekly - current_margin_weekly)
+            rec_margin_pct = round(rec_margin_unit / recommended_price * 100, 1) if recommended_price > 0 else 0
+
+            if rec_margin_pct < 20:
+                reasons.append(f"THIN MARGIN: {rec_margin_pct:.0f}% at recommended price")
+        else:
+            margin_delta = None
+            rec_margin_pct = None
 
         parent_actions.append({
             "parent_sku": parent,
@@ -701,6 +775,9 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "current_weekly_rev": int(current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
             "expected_weekly_rev": int(expected_weekly_rev),
             "rev_delta": int(expected_weekly_rev - current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
+            "unit_cost": int(unit_cost) if unit_cost else None,
+            "margin_pct": rec_margin_pct,
+            "margin_delta": margin_delta,
             "urgency": urgency,
             "reasons": "; ".join(reasons),
             "model_confidence": round(avg_prob, 3),

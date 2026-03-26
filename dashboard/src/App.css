@@ -239,6 +239,15 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .admin-domains { font-size: 12px; color: var(--slate-500); display: flex; gap: 6px; }
 .admin-domains-label { font-weight: 500; }
 
+/* ── Margin ── */
+.margin--ok { color: var(--green-700); }
+.margin--warn { color: var(--amber-600); }
+.margin--danger { color: var(--red-600); font-weight: 700; }
+.margin-badge { display: block; font-size: 10px; font-weight: 600; margin-top: 2px; color: var(--slate-400); }
+.margin-badge.margin--warn { color: var(--amber-600); }
+.margin-badge.margin--danger { color: var(--red-600); }
+.kpi--margin .kpi-bar { background: var(--green-500); }
+
 /* ── Pagination ── */
 .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0; }
 .pagination button { font-family: var(--font-body); font-size: 12px; font-weight: 600; padding: 6px 14px; border: 1px solid var(--slate-200); border-radius: var(--radius); background: #fff; color: var(--slate-600); cursor: pointer; }

@@ -319,6 +319,7 @@ function ActionRow({ action, status, onDecide, canApprove, feedback }) {
 
         <div className={`row-delta ${delta >= 0 ? 'row-delta--pos' : 'row-delta--neg'}`}>
           {delta >= 0 ? '+' : ''}{clpCompact(delta)}
+          {action.margin_pct != null && <span className={`margin-badge ${action.margin_pct < 20 ? 'margin--danger' : action.margin_pct < 40 ? 'margin--warn' : ''}`}>{action.margin_pct}%m</span>}
         </div>
 
         {canApprove && (
@@ -353,6 +354,9 @@ function ActionRow({ action, status, onDecide, canApprove, feedback }) {
             <div className="dcell"><span className="dcell-label">Confianza</span><span className="dcell-val">{(Number(action.model_confidence) * 100).toFixed(0)}%</span></div>
             <div className="dcell"><span className="dcell-label">Rev semanal actual</span><span className="dcell-val mono">{clp(action.current_weekly_rev)}</span></div>
             <div className="dcell"><span className="dcell-label">Rev semanal esperado</span><span className="dcell-val mono">{clp(action.expected_weekly_rev)}</span></div>
+            {action.unit_cost && <div className="dcell"><span className="dcell-label">Costo unitario</span><span className="dcell-val mono">{clp(action.unit_cost)}</span></div>}
+            {action.margin_pct != null && <div className="dcell"><span className="dcell-label">Margen</span><span className={`dcell-val mono ${action.margin_pct < 20 ? 'margin--danger' : action.margin_pct < 40 ? 'margin--warn' : 'margin--ok'}`}>{action.margin_pct}%</span></div>}
+            {action.margin_delta != null && <div className="dcell"><span className="dcell-label">Delta margen/sem</span><span className={`dcell-val mono ${action.margin_delta >= 0 ? 'margin--ok' : 'margin--danger'}`}>{action.margin_delta >= 0 ? '+' : ''}{clpCompact(action.margin_delta)}</span></div>}
           </div>
           <div className="detail-reason"><AlertTriangle size={13} /> {action.reasons}</div>
         </div>
@@ -843,9 +847,21 @@ function App() {
         </div>
         <div className="kpi kpi--impact">
           <div className={`kpi-value ${approvedImpact >= 0 ? 'kpi-value--pos' : 'kpi-value--neg'}`}>{approvedImpact >= 0 ? '+' : ''}{clpCompact(approvedImpact)}</div>
-          <div className="kpi-label">Impacto aprobado</div>
+          <div className="kpi-label">Rev aprobado</div>
           <div className="kpi-bar kpi-bar--impact" />
         </div>
+        {(() => {
+          const marginItems = approvedItems.filter(a => a.margin_delta != null)
+          if (marginItems.length === 0) return null
+          const totalMargin = marginItems.reduce((s, a) => s + (Number(a.margin_delta) || 0), 0)
+          return (
+            <div className="kpi kpi--margin">
+              <div className={`kpi-value ${totalMargin >= 0 ? 'kpi-value--pos' : 'kpi-value--neg'}`}>{totalMargin >= 0 ? '+' : ''}{clpCompact(totalMargin)}</div>
+              <div className="kpi-label">Margen aprobado</div>
+              <div className="kpi-bar kpi-bar--margin" />
+            </div>
+          )
+        })()}
       </div>
 
       <div className="toolbar">
