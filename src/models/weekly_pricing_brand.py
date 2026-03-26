@@ -42,6 +42,7 @@ EXCLUDE_COLS = [
     "sku", "centro", "week", "codigo_padre", "first_sale_date",
     "will_discount_4w", "future_max_disc_4w", "future_velocity_2w", "velocity_lift",
     "color1", "tercera_jerarquia",
+    "should_reprice", "optimal_disc_margin", "optimal_profit",
 ]
 
 

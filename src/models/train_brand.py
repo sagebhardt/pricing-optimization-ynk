@@ -30,6 +30,7 @@ EXCLUDE_COLS = [
     "sku", "centro", "week", "codigo_padre", "first_sale_date",
     "will_discount_4w", "future_max_disc_4w", "future_velocity_2w", "velocity_lift",
     "color1", "tercera_jerarquia",
+    "should_reprice", "optimal_disc_margin", "optimal_profit",
 ]
 
 CATEGORICAL_COLS = ["primera_jerarquia", "segunda_jerarquia", "genero", "grupo_etario"]
@@ -127,13 +128,31 @@ def train_brand_models(brand: str):
         pass
 
     # ================================================================
-    # Classifier: Markdown Probability
+    # Determine training mode: margin-optimized (prescriptive) or legacy (descriptive)
+    # ================================================================
+    has_margin_targets = "should_reprice" in df.columns and df["should_reprice"].notna().sum() > 100
+    if has_margin_targets:
+        cls_target = "should_reprice"
+        reg_target = "optimal_disc_margin"
+        training_mode = "margin"
+        print(f"\n  >>> MARGIN-OPTIMIZED training (costs available)")
+        print(f"      Classifier target: should_reprice (prescriptive)")
+        print(f"      Regressor target:  optimal_disc_margin (profit-maximizing)")
+    else:
+        cls_target = "will_discount_4w"
+        reg_target = "future_max_disc_4w"
+        training_mode = "revenue"
+        print(f"\n  >>> REVENUE-BASED training (no costs — using historical markdown patterns)")
+
+    # ================================================================
+    # Classifier
     # ================================================================
     print(f"\n{'=' * 60}")
-    print(f"[{brand}] MODEL 1: Markdown Probability")
+    label = "Should Reprice (Margin)" if has_margin_targets else "Markdown Probability"
+    print(f"[{brand}] MODEL 1: {label}")
     print("=" * 60)
 
-    X, y, w, fcols = prepare(df, "will_discount_4w")
+    X, y, w, fcols = prepare(df, cls_target)
     print(f"  Features: {len(fcols)}")
     print(f"  Positive rate: {y.mean():.3f}")
 
@@ -190,11 +209,16 @@ def train_brand_models(brand: str):
     # Regressor: Discount Depth
     # ================================================================
     print(f"\n{'=' * 60}")
-    print(f"[{brand}] MODEL 2: Discount Depth")
+    label2 = "Optimal Discount (Margin)" if has_margin_targets else "Discount Depth"
+    print(f"[{brand}] MODEL 2: {label2}")
     print("=" * 60)
 
-    df_disc = df[df["will_discount_4w"] == 1].copy()
-    X, y, w, fcols = prepare(df_disc, "future_max_disc_4w")
+    if has_margin_targets:
+        # Train on all rows where repricing is recommended (not just historical markdowns)
+        df_disc = df[df["should_reprice"] == 1].copy()
+    else:
+        df_disc = df[df["will_discount_4w"] == 1].copy()
+    X, y, w, fcols = prepare(df_disc, reg_target)
     print(f"  Features: {len(fcols)}")
     print(f"  Samples: {len(X):,}")
 
@@ -267,7 +291,10 @@ def train_brand_models(brand: str):
         },
         "brand": brand,
         "version": "v2",
-        "note": "Enhanced with price elasticity, lifecycle stages, size curve, derived seasons, inventory/stock features.",
+        "training_mode": training_mode,
+        "classifier_target": cls_target,
+        "regressor_target": reg_target,
+        "note": f"{'Margin-optimized (prescriptive)' if has_margin_targets else 'Revenue-based (descriptive)'}. Features: elasticity, lifecycle, size curve, seasons, inventory.",
     }
     with open(model_dir / "training_metadata.json", "w") as f:
         json.dump(meta, f, indent=2, default=str)

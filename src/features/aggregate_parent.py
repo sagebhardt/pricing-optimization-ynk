@@ -229,6 +229,12 @@ def aggregate_to_parent(brand: str):
         .reset_index()
     )
 
+    # Margin-optimal targets (conditional — only if costs available)
+    for col, agg_fn in [("should_reprice", "max"), ("optimal_disc_margin", "median"), ("optimal_profit", "sum")]:
+        if col in child.columns:
+            vals = child.groupby(["codigo_padre", "centro", "week"])[col].agg(agg_fn).rename(col)
+            parent = parent.merge(vals, on=["codigo_padre", "centro", "week"], how="left")
+
     # Stock features (conditional — only if stock data was available)
     stock_cols = ["stock_on_hand", "stock_in_transit", "stock_total",
                   "weeks_of_cover", "stock_out_days", "stock_to_sales_ratio"]

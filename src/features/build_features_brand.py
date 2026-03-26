@@ -451,6 +451,125 @@ def filter_active_rows(weekly: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
+DISCOUNT_STEPS = [0.0, 0.15, 0.20, 0.30, 0.40]
+EMPIRICAL_LIFT = {0.0: 1.0, 0.15: 1.8, 0.20: 2.2, 0.30: 3.0, 0.40: 4.0}
+
+
+def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
+    """
+    Compute margin-optimal discount targets for each SKU-store-week.
+
+    For each row, simulates gross profit at each discount step:
+        profit(step) = (list_price * (1 - step) - cost) * velocity(step)
+
+    Velocity at each step is estimated via elasticity (if available)
+    or empirical lift table.
+
+    Adds columns:
+        optimal_disc_margin  — the discount step that maximizes weekly gross profit
+        should_reprice       — 1 if current discount != optimal, 0 otherwise
+        optimal_profit       — estimated gross profit at optimal discount
+    """
+    raw = _raw_dir(brand)
+    costs_df = pd.read_parquet(raw / "costs.parquet")
+    costs_df = costs_df[costs_df["cost"] > 0].dropna(subset=["cost"])
+    cost_map = costs_df.set_index("sku")["cost"].to_dict()
+    sorted_keys = sorted(cost_map.keys(), key=len, reverse=True)
+
+    # Load elasticity if available
+    processed = _processed_dir(brand)
+    elast_map = {}
+    try:
+        elast_df = pd.read_parquet(processed / "elasticity_by_sku.parquet")
+        elast_map = elast_df[elast_df["confidence"].isin(["high", "medium"])].set_index("codigo_padre")["elasticity"].to_dict()
+    except FileNotFoundError:
+        pass
+
+    def _get_cost(sku):
+        if sku in cost_map:
+            return cost_map[sku]
+        for k in sorted_keys:
+            if sku.startswith(k):
+                return cost_map[k]
+        return None
+
+    def _snap_disc(d):
+        if d < 0.07:
+            return 0.0
+        return min(DISCOUNT_STEPS, key=lambda s: abs(s - d))
+
+    def _estimate_velocity(base_vel, base_disc, target_disc, elasticity):
+        if base_vel <= 0:
+            return 0.1
+        if target_disc <= base_disc:
+            return base_vel  # not deepening discount
+        disc_change = target_disc - base_disc
+        if elasticity is not None and elasticity < -0.3:
+            vol_change = -disc_change * elasticity
+            return max(base_vel * (1 + vol_change), 0.1)
+        base_lift = EMPIRICAL_LIFT.get(_snap_disc(base_disc), 1.0)
+        target_lift = EMPIRICAL_LIFT.get(target_disc, 1 + target_disc * 5)
+        return max(base_vel * target_lift / max(base_lift, 0.1), 0.1)
+
+    # Vectorized would be ideal but the logic is complex — use apply
+    results = []
+    parent_col = "codigo_padre" if "codigo_padre" in weekly.columns else "sku"
+
+    for _, row in weekly.iterrows():
+        sku = row.get(parent_col, row.get("sku", ""))
+        list_price = row.get("avg_precio_lista", 0)
+        actual_disc = row.get("discount_rate", 0)
+        actual_vel = row.get("velocity_4w", 0)
+        cost = _get_cost(sku)
+
+        if not cost or pd.isna(list_price) or list_price <= 0 or pd.isna(actual_vel) or actual_vel <= 0:
+            results.append((np.nan, np.nan, np.nan))
+            continue
+
+        actual_disc = actual_disc if pd.notna(actual_disc) else 0
+        elasticity = elast_map.get(sku)
+
+        best_profit = -float("inf")
+        best_step = _snap_disc(actual_disc)
+
+        for step in DISCOUNT_STEPS:
+            price = list_price * (1 - step)
+            margin_per_unit = price - cost
+            if margin_per_unit <= 0 and step > 0:
+                continue  # skip unprofitable discount levels
+
+            if step <= actual_disc:
+                # Going up (reducing discount) — assume 25% volume loss per 10pp
+                vol_factor = max(1 - (actual_disc - step) * 2.5, 0.3)
+                est_vel = actual_vel * vol_factor
+            else:
+                est_vel = _estimate_velocity(actual_vel, actual_disc, step, elasticity)
+
+            profit = margin_per_unit * est_vel
+            if profit > best_profit:
+                best_profit = profit
+                best_step = step
+
+        current_step = _snap_disc(actual_disc)
+        should_reprice = 1 if best_step != current_step else 0
+        results.append((best_step, should_reprice, best_profit))
+
+    margin_df = pd.DataFrame(results, columns=["optimal_disc_margin", "should_reprice", "optimal_profit"],
+                              index=weekly.index)
+    weekly = pd.concat([weekly, margin_df], axis=1)
+
+    n_valid = margin_df["optimal_disc_margin"].notna().sum()
+    n_reprice = (margin_df["should_reprice"] == 1).sum()
+    print(f"  Margin targets: {n_valid:,} rows with cost data, {n_reprice:,} should reprice ({n_reprice/max(n_valid,1):.0%})")
+
+    # Distribution of optimal discounts
+    dist = margin_df["optimal_disc_margin"].dropna().value_counts().sort_index()
+    for step, count in dist.items():
+        print(f"    {step:5.0%}: {count:>8,} rows ({count/n_valid:.0%})")
+
+    return weekly
+
+
 def build_features_for_brand(brand: str):
     """Main feature engineering pipeline for a given brand."""
     processed = _processed_dir(brand)
@@ -527,6 +646,14 @@ def build_features_for_brand(brand: str):
 
     print(f"[{brand}] Filtering to active periods...")
     weekly = filter_active_rows(weekly)
+
+    # Margin-optimal targets (when costs available)
+    costs_path = _raw_dir(brand) / "costs.parquet"
+    if costs_path.exists():
+        print(f"[{brand}] Computing margin-optimal targets...")
+        weekly = add_margin_targets(weekly, brand)
+    else:
+        print(f"[{brand}] No cost data — margin targets unavailable")
 
     # Drop temp columns
     drop_cols = [c for c in weekly.columns if c.startswith("_")]
