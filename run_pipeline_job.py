@@ -3,19 +3,15 @@
 Cloud Run Job entrypoint — runs the full weekly pipeline for all brands.
 
 Designed to run as a Cloud Run Job triggered by Cloud Scheduler every Monday.
-Each brand runs sequentially: extract → features → enhance → aggregate → train → pricing → sync.
-Failures in one brand don't block others.
+Each brand runs as a subprocess so the OS fully reclaims memory between brands
+(Python's gc doesn't return memory to the OS, causing OOM on multi-brand runs).
 """
 
-import gc
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-
-from run_brand import main as run_brand_main
 
 BRANDS = os.getenv("PIPELINE_BRANDS", "HOKA,BOLD,BAMERS,OAKLEY").split(",")
 STEPS = os.getenv("PIPELINE_STEPS", "extract,features,elasticity,lifecycle,size_curve,enhance,aggregate,train,pricing,sync").split(",")
@@ -28,7 +24,7 @@ def run():
     print(f"Brands: {', '.join(BRANDS)}")
     print(f"Steps: {', '.join(STEPS)}")
     print(f"GCS_BUCKET: {os.getenv('GCS_BUCKET', 'NOT SET')}")
-    print(f"{'=' * 60}")
+    print(f"{'=' * 60}", flush=True)
 
     failed = []
 
@@ -36,19 +32,19 @@ def run():
         brand = brand.strip().upper()
         print(f"\n{'=' * 60}")
         print(f"--- {brand} ---")
-        print(f"{'=' * 60}")
+        print(f"{'=' * 60}", flush=True)
 
-        try:
-            sys.argv = ["run_brand.py", brand, "--steps"] + STEPS
-            run_brand_main()
-        except SystemExit:
-            pass  # argparse calls sys.exit(0) on success
-        except Exception as e:
-            print(f"\n  {brand} FAILED: {e}")
+        # Run each brand as a subprocess — OS reclaims ALL memory on exit
+        # (vectorized lifecycle/size_curve create multi-GB intermediates)
+        result = subprocess.run(
+            [sys.executable, "run_brand.py", brand, "--steps"] + STEPS,
+            cwd=str(Path(__file__).parent),
+            env=os.environ.copy(),
+        )
+
+        if result.returncode != 0:
+            print(f"\n  {brand} FAILED (exit code {result.returncode})")
             failed.append(brand)
-
-        # Free memory between brands (vectorized pipeline creates large intermediates)
-        gc.collect()
 
     elapsed = time.time() - start
     print(f"\n{'=' * 60}")
