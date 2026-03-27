@@ -163,6 +163,31 @@ def extract_brand(brand_name: str):
         except Exception as e:
             print(f"  GCS supplemental download skipped: {e}")
 
+    # 9. Generate costs from ti.productos if no costs.parquet yet
+    costs_path = raw_dir / "costs.parquet"
+    if not costs_path.exists():
+        try:
+            conn2 = get_connection()
+            parent_skus = list(products["codigo_padre"].dropna().unique())
+            if parent_skus:
+                placeholders = ",".join(["%s"] * len(parent_skus))
+                cost_df = pd.read_sql(
+                    f"SELECT cod_padre AS sku, reg_info AS cost FROM ti.productos WHERE cod_padre IN ({placeholders})",
+                    conn2, params=parent_skus,
+                )
+                cost_df = cost_df[cost_df["cost"] > 0].dropna(subset=["cost"])
+                # Convert USD to CLP: costs < 500 are in USD
+                cost_df["cost"] = cost_df["cost"].apply(
+                    lambda c: c * 1000 if c < 500 else c
+                )
+                cost_df = cost_df.drop_duplicates(subset=["sku"])
+                if len(cost_df) > 0:
+                    cost_df.to_parquet(costs_path, index=False)
+                    print(f"  Generated costs.parquet from ti.productos: {len(cost_df):,} SKUs")
+            conn2.close()
+        except Exception as e:
+            print(f"  ti.productos cost extraction skipped: {e}")
+
     print(f"\n--- {brand_name} Extraction Complete ---")
     print(f"  Transactions: {len(txn):,}")
     print(f"  Products:     {len(products):,}")
