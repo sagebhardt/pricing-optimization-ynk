@@ -27,7 +27,7 @@ from src.features.aggregate_parent import aggregate_to_parent
 from src.models.train_brand import train_brand_models
 from src.models.weekly_pricing_brand import generate_weekly_actions_for_brand
 
-ALL_STEPS = ["extract", "features", "elasticity", "lifecycle", "size_curve", "enhance", "aggregate", "train", "pricing", "sync"]
+ALL_STEPS = ["extract", "elasticity", "features", "lifecycle", "size_curve", "enhance", "aggregate", "train", "pricing", "sync"]
 
 PROJECT_ROOT = Path(__file__).parent
 
