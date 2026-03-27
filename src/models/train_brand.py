@@ -221,6 +221,8 @@ def train_brand_models(brand: str):
     X, y, w, fcols = prepare(df_disc, reg_target)
     print(f"  Features: {len(fcols)}")
     print(f"  Samples: {len(X):,}")
+    print(f"  Target stats: mean={y.mean():.4f} std={y.std():.4f} min={y.min():.4f} max={y.max():.4f}")
+    print(f"  Target distribution: {np.histogram(y, bins=[0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,1.0])[0]}")
 
     reg_params = {
         "n_estimators": 500,
