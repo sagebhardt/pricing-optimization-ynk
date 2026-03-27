@@ -111,19 +111,22 @@ def extract_brand(brand_name: str):
     mkdown.to_parquet(raw_dir / "mkdown_contribution_2024.parquet", index=False)
     print(f"  {len(mkdown):,} records")
 
-    # 6. Stock / inventory
+    # 6. Stock / inventory (last 16 weeks only — sufficient for size curve trailing 12w peak)
     stock = pd.DataFrame()
     stock_table = STOCK_TABLES.get(brand_name)
     if stock_table:
         print(f"Extracting stock from {stock_table}...")
         try:
-            stock = pd.read_sql(f"SELECT * FROM {stock_table}", conn)
+            stock = pd.read_sql(
+                f"SELECT * FROM {stock_table} WHERE fecha >= CURRENT_DATE - INTERVAL '16 weeks'",
+                conn,
+            )
             n_raw = len(stock)
             if len(brand_skus) > 0:
                 stock = stock[stock["sku"].isin(brand_skus)]
             stock["fecha"] = pd.to_datetime(stock["fecha"])
             stock.to_parquet(raw_dir / "stock.parquet", index=False)
-            print(f"  {len(stock):,} stock records (from {n_raw:,} raw)")
+            print(f"  {len(stock):,} stock records (from {n_raw:,} raw, last 16 weeks)")
             if len(stock) > 0:
                 print(f"  Date range: {stock['fecha'].min().date()} to {stock['fecha'].max().date()}")
                 print(f"  Stores: {stock['store_id'].nunique()}")
