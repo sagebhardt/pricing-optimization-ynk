@@ -7,6 +7,7 @@ Each brand runs sequentially: extract → features → enhance → aggregate →
 Failures in one brand don't block others.
 """
 
+import gc
 import os
 import sys
 import time
@@ -45,6 +46,9 @@ def run():
         except Exception as e:
             print(f"\n  {brand} FAILED: {e}")
             failed.append(brand)
+
+        # Free memory between brands (vectorized pipeline creates large intermediates)
+        gc.collect()
 
     elapsed = time.time() - start
     print(f"\n{'=' * 60}")

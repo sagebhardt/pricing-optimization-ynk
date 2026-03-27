@@ -144,6 +144,22 @@ def extract_brand(brand_name: str):
 
     conn.close()
 
+    # 8. Supplemental files from GCS (costs, official_prices — not in DB)
+    bucket_name = os.environ.get("GCS_BUCKET", "")
+    if bucket_name:
+        try:
+            from google.cloud import storage
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            for fname in ["costs.parquet", "official_prices.parquet"]:
+                blob = bucket.blob(f"data/raw/{brand_name.lower()}/{fname}")
+                if blob.exists():
+                    dest = raw_dir / fname
+                    blob.download_to_filename(str(dest))
+                    print(f"  Downloaded {fname} from GCS")
+        except Exception as e:
+            print(f"  GCS supplemental download skipped: {e}")
+
     print(f"\n--- {brand_name} Extraction Complete ---")
     print(f"  Transactions: {len(txn):,}")
     print(f"  Products:     {len(products):,}")
