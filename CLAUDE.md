@@ -66,7 +66,7 @@ API (Cloud Run, slim image ~50MB):
 - Use `./scripts/build.sh pipeline` — handles the swap safely with `trap` cleanup.
 
 ## Cloud Infrastructure
-- **Cloud Run Service**: `pricing-api` (512 MiB, 1 CPU, min-instances=1)
+- **Cloud Run Service**: `pricing-api` (1 GiB, 1 CPU, min-instances=1)
 - **Cloud Run Job**: `pricing-pipeline` (32 GiB, 8 CPU, 2hr timeout)
 - **Cloud Scheduler**: `pricing-pipeline-weekly` (Monday 09:00 UTC / 6am CLT)
 - **GCS Bucket**: `gs://ynk-pricing-decisions`
