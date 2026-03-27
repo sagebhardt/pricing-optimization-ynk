@@ -52,17 +52,23 @@ def compute_parent_weekly_sales(txn, brand: str):
     sales["week"] = sales["fecha"].dt.to_period("W").dt.start_time
     sales["codigo_padre"] = sales["sku"].map(sku_to_parent)
 
+    # Pre-compute discount components (avoids slow lambda inside groupby.agg)
     parent_weekly = (
         sales.groupby(["codigo_padre", "centro", "week"])
         .agg(
             units=("cantidad", "sum"),
             revenue=("precio_final", "sum"),
-            avg_discount_rate=("descuento", lambda x: x.sum() / max(sales.loc[x.index, "precio_lista"].sum(), 1)),
+            _total_descuento=("descuento", "sum"),
+            _total_precio_lista=("precio_lista", "sum"),
             n_sizes=("sku", "nunique"),
         )
         .reset_index()
-        .sort_values(["codigo_padre", "centro", "week"])
     )
+    parent_weekly["avg_discount_rate"] = (
+        parent_weekly.pop("_total_descuento")
+        / parent_weekly.pop("_total_precio_lista").clip(lower=1)
+    )
+    parent_weekly = parent_weekly.sort_values(["codigo_padre", "centro", "week"])
 
     return parent_weekly
 
@@ -78,101 +84,134 @@ def assign_lifecycle_stage(parent_weekly):
     - STEADY: velocity within 0.5-1.5x of overall median
     - DECLINE: velocity < 0.5x median OR falling for 4+ weeks
     - CLEARANCE: decline + discount rate > 15%
+
+    Vectorized implementation — fills week gaps, computes rolling metrics,
+    and assigns stages without per-row Python iteration.
     """
-    df = parent_weekly.copy()
+    df = parent_weekly.sort_values(["codigo_padre", "centro", "week"]).copy()
+    gk = ["codigo_padre", "centro"]
 
-    lifecycle_rows = []
+    # ── Split small groups (< 3 observations) → "launch" directly ──
+    raw_counts = df.groupby(gk).size().rename("_raw_n").reset_index()
+    small_pairs = raw_counts.loc[raw_counts["_raw_n"] < 3, gk]
+    large_pairs = raw_counts.loc[raw_counts["_raw_n"] >= 3, gk]
 
-    for (parent, store), group in df.groupby(["codigo_padre", "centro"]):
-        g = group.sort_values("week").reset_index(drop=True)
+    small_data = None
+    if len(small_pairs) > 0:
+        small_data = df.merge(small_pairs, on=gk)
+        small_data["lifecycle_stage"] = "launch"
+        small_data["lifecycle_position"] = 0.0
+        small_data["est_weeks_remaining"] = np.nan
 
-        if len(g) < 3:
-            for _, row in g.iterrows():
-                lifecycle_rows.append({**row.to_dict(), "lifecycle_stage": "launch", "lifecycle_position": 0.0})
-            continue
+    if len(large_pairs) == 0:
+        return small_data if small_data is not None else pd.DataFrame()
 
-        # Fill week gaps with zeros
-        all_weeks = pd.date_range(g["week"].min(), g["week"].max(), freq="W-MON")
-        g = g.set_index("week").reindex(all_weeks).rename_axis("week").reset_index()
-        g["codigo_padre"] = parent
-        g["centro"] = store
-        g["units"] = g["units"].fillna(0)
-        g["revenue"] = g["revenue"].fillna(0)
-        g["avg_discount_rate"] = g["avg_discount_rate"].fillna(0)
+    # ── Build complete week grid (vectorized, no per-group Python loop) ──
+    large_data = df.merge(large_pairs, on=gk)
+    group_ranges = (
+        large_data.groupby(gk)["week"].agg(["min", "max"]).reset_index()
+    )
+    group_ranges["_n_weeks"] = (
+        (group_ranges["max"] - group_ranges["min"]).dt.days // 7 + 1
+    ).astype(int)
 
-        n = len(g)
+    # Expand: repeat each group row n_weeks times, add week offsets
+    grid = group_ranges.loc[
+        group_ranges.index.repeat(group_ranges["_n_weeks"])
+    ].reset_index(drop=True)
+    grid["week"] = grid["min"] + pd.to_timedelta(
+        grid.groupby(gk).cumcount() * 7, unit="D"
+    )
+    full_grid = grid[gk + ["week"]]
 
-        # Rolling metrics
-        g["vel_4w"] = g["units"].rolling(4, min_periods=1).mean()
-        g["vel_8w"] = g["units"].rolling(8, min_periods=1).mean()
-        g["vel_expanding"] = g["units"].expanding().mean()
+    # Left-join actual data; gap rows become NaN → filled with 0
+    df_full = full_grid.merge(large_data, on=gk + ["week"], how="left")
+    df_full[["units", "revenue", "avg_discount_rate"]] = (
+        df_full[["units", "revenue", "avg_discount_rate"]].fillna(0)
+    )
+    df_full = df_full.sort_values(gk + ["week"]).reset_index(drop=True)
 
-        # Peak velocity
-        peak_vel = g["vel_4w"].max()
-        median_vel = g["units"].median()
-        if median_vel == 0:
-            median_vel = 0.1  # avoid division by zero
+    # ── Rolling velocity metrics (groupby + transform) ──
+    grp_units = df_full.groupby(gk)["units"]
+    df_full["vel_4w"] = grp_units.transform(lambda x: x.rolling(4, min_periods=1).mean())
+    df_full["vel_8w"] = grp_units.transform(lambda x: x.rolling(8, min_periods=1).mean())
+    df_full["vel_expanding"] = grp_units.transform(lambda x: x.expanding().mean())
 
-        # Velocity ratio vs median
-        g["vel_ratio"] = g["vel_4w"] / median_vel
+    # ── Per-group statistics via transform (no Python loop) ──
+    _peak_vel = df_full.groupby(gk)["vel_4w"].transform("max")
+    _median_vel = df_full.groupby(gk)["units"].transform("median").clip(lower=0.1)
 
-        # Velocity trend (is it rising or falling?)
-        g["vel_trend"] = g["vel_4w"] / g["vel_8w"].clip(lower=0.01)
+    df_full["vel_ratio"] = df_full["vel_4w"] / _median_vel
+    df_full["vel_trend"] = df_full["vel_4w"] / df_full["vel_8w"].clip(lower=0.01)
+    df_full["week_idx"] = df_full.groupby(gk).cumcount()
 
-        # Week index
-        g["week_idx"] = range(n)
+    # ── Vectorized lifecycle stage (np.select = first match wins, like if/elif) ──
+    wi = df_full["week_idx"].values
+    dr = df_full["avg_discount_rate"].values
+    vr = df_full["vel_ratio"].values
+    vt = df_full["vel_trend"].values
+    v4 = df_full["vel_4w"].values
+    pv = _peak_vel.values
 
-        stages = []
-        for i, row in g.iterrows():
-            week_idx = row["week_idx"]
-            vel_4w = row["vel_4w"]
-            vel_ratio = row["vel_ratio"]
-            vel_trend = row["vel_trend"]
-            disc_rate = row["avg_discount_rate"]
+    conditions = [
+        wi < 4,
+        (dr > 0.15) & (vr < 0.7),
+        (vr < 0.5) | ((vt < 0.7) & (wi > 8)),
+        (v4 >= pv * 0.8) & (pv > 0),
+        (vt > 1.1) & (vr > 0.8),
+    ]
+    choices = ["launch", "clearance", "decline", "peak", "growth"]
+    df_full["lifecycle_stage"] = np.select(conditions, choices, default="steady")
 
-            if week_idx < 4:
-                stage = "launch"
-            elif disc_rate > 0.15 and vel_ratio < 0.7:
-                stage = "clearance"
-            elif vel_ratio < 0.5 or (vel_trend < 0.7 and week_idx > 8):
-                stage = "decline"
-            elif vel_4w >= peak_vel * 0.8 and peak_vel > 0:
-                stage = "peak"
-            elif vel_trend > 1.1 and vel_ratio > 0.8:
-                stage = "growth"
-            else:
-                stage = "steady"
+    # ── Lifecycle position (0.0 = start, 1.0 = end) ──
+    group_max_idx = df_full.groupby(gk)["week_idx"].transform("max").clip(lower=1)
+    df_full["lifecycle_position"] = df_full["week_idx"] / group_max_idx
 
-            stages.append(stage)
+    # ── Estimated weeks remaining (fully vectorized) ──
+    rev_rank = df_full.groupby(gk).cumcount(ascending=False)
+    n_per_group = df_full.groupby(gk)["week_idx"].transform("count")
 
-        g["lifecycle_stage"] = stages
+    last_rows = (
+        df_full.loc[rev_rank == 0, gk + ["vel_4w"]]
+        .rename(columns={"vel_4w": "_last_vel"}).copy()
+    )
+    eighth_rows = (
+        df_full.loc[rev_rank == 7, gk + ["vel_4w"]]
+        .rename(columns={"vel_4w": "_eighth_vel"}).copy()
+    )
+    n_rows = df_full.loc[rev_rank == 0, gk].copy()
+    n_rows["_n"] = n_per_group.loc[rev_rank == 0].values
 
-        # Lifecycle position (0.0 = start, 1.0 = end)
-        g["lifecycle_position"] = g["week_idx"] / max(n - 1, 1)
+    est = last_rows.merge(eighth_rows, on=gk, how="left").merge(n_rows, on=gk, how="left")
 
-        # Estimated weeks remaining based on velocity decay
-        if n > 8:
-            recent_vel = g["vel_4w"].iloc[-1]
-            if recent_vel > 0:
-                recent = g["vel_4w"].iloc[-8:].values
-                if recent[0] > 0 and recent[-1] > 0:
-                    decay_rate = np.log(recent[-1] / recent[0]) / 8 if recent[0] != recent[-1] else 0
-                    if decay_rate < 0:
-                        weeks_to_min = np.log(0.5 / recent_vel) / decay_rate if recent_vel > 0.5 else 0
-                        g["est_weeks_remaining"] = max(0, weeks_to_min)
-                    else:
-                        g["est_weeks_remaining"] = np.nan  # Not declining
-                else:
-                    g["est_weeks_remaining"] = np.nan
-            else:
-                g["est_weeks_remaining"] = 0
-        else:
-            g["est_weeks_remaining"] = np.nan
+    has_decay = (
+        (est["_n"] > 8)
+        & (est["_last_vel"] > 0)
+        & (est["_eighth_vel"] > 0)
+        & (est["_last_vel"] != est["_eighth_vel"])
+    )
+    # clip to avoid log(0) warnings — has_decay mask filters results anyway
+    _safe_eighth = est["_eighth_vel"].clip(lower=1e-10).values
+    decay = np.where(
+        has_decay,
+        np.log(est["_last_vel"].values / _safe_eighth) / 8,
+        np.nan,
+    )
+    est["est_weeks_remaining"] = np.where(
+        (decay < 0) & (est["_last_vel"].values > 0.5),
+        np.maximum(0.0, np.log(0.5 / est["_last_vel"].values) / decay),
+        np.nan,
+    )
+    est.loc[(est["_n"] > 8) & (est["_last_vel"] <= 0), "est_weeks_remaining"] = 0.0
 
-        for _, row in g.iterrows():
-            lifecycle_rows.append(row.to_dict())
+    df_full = df_full.merge(est[gk + ["est_weeks_remaining"]], on=gk, how="left")
 
-    result = pd.DataFrame(lifecycle_rows)
+    # ── Combine with small groups ──
+    parts = [df_full]
+    if small_data is not None:
+        parts.append(small_data)
+    result = pd.concat(parts, ignore_index=True)
+
     return result
 
 

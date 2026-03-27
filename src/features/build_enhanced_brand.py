@@ -56,16 +56,22 @@ def build_enhanced_for_brand(brand: str):
         elast_map = reliable.set_index("codigo_padre")["elasticity"].to_dict()
         features["price_elasticity_sku"] = features["codigo_padre"].map(elast_map)
 
-        cat_map = cat_elast.set_index(["primera_jerarquia", "segunda_jerarquia"])["elasticity"].to_dict()
-        features["price_elasticity_cat"] = features.apply(
-            lambda r: cat_map.get((r["primera_jerarquia"], r.get("segunda_jerarquia")), np.nan), axis=1
-        )
+        # Category elasticity fallback (handle empty cat_elast gracefully)
+        if len(cat_elast) > 0 and "primera_jerarquia" in cat_elast.columns:
+            cat_map = cat_elast.set_index(["primera_jerarquia", "segunda_jerarquia"])["elasticity"].to_dict()
+            features["price_elasticity_cat"] = [
+                cat_map.get(k, np.nan)
+                for k in zip(features["primera_jerarquia"], features["segunda_jerarquia"])
+            ]
+        else:
+            features["price_elasticity_cat"] = np.nan
+
         features["price_elasticity"] = features["price_elasticity_sku"].fillna(features["price_elasticity_cat"])
         features.drop(columns=["price_elasticity_sku", "price_elasticity_cat"], inplace=True)
 
         coverage = features["price_elasticity"].notna().mean()
         print(f"  Coverage: {coverage:.1%}")
-    except FileNotFoundError:
+    except (FileNotFoundError, KeyError):
         print("  (not available)")
         features["price_elasticity"] = np.nan
 

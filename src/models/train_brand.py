@@ -214,8 +214,8 @@ def train_brand_models(brand: str):
     print("=" * 60)
 
     if has_margin_targets:
-        # Train on all rows where repricing is recommended (not just historical markdowns)
-        df_disc = df[df["should_reprice"] == 1].copy()
+        # Train on ALL rows with margin targets — includes "already optimal" as signal
+        df_disc = df[df["optimal_disc_margin"].notna()].copy()
     else:
         df_disc = df[df["will_discount_4w"] == 1].copy()
     X, y, w, fcols = prepare(df_disc, reg_target)
@@ -223,12 +223,14 @@ def train_brand_models(brand: str):
     print(f"  Samples: {len(X):,}")
 
     reg_params = {
-        "n_estimators": 300,
-        "max_depth": 5,
-        "learning_rate": 0.05,
+        "n_estimators": 500,
+        "max_depth": 7,
+        "learning_rate": 0.03,
         "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "early_stopping_rounds": 20,
+        "colsample_bytree": 0.7,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+        "early_stopping_rounds": 30,
         "random_state": 42,
     }
 
@@ -284,6 +286,7 @@ def train_brand_models(brand: str):
             "cv_results": reg_results,
             "avg_mae": v2_mae,
             "avg_r2": v2_r2,
+            "n_samples": len(X),
             "improvement_vs_v1": {
                 "mae_delta": v2_mae - v1_mae if v1_mae else None,
                 "r2_delta": v2_r2 - v1_r2 if v1_r2 else None,

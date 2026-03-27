@@ -451,8 +451,11 @@ def filter_active_rows(weekly: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
-DISCOUNT_STEPS = [0.0, 0.15, 0.20, 0.30, 0.40]
-EMPIRICAL_LIFT = {0.0: 1.0, 0.15: 1.8, 0.20: 2.2, 0.30: 3.0, 0.40: 4.0}
+DISCOUNT_STEPS = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+EMPIRICAL_LIFT = {
+    0.0: 1.0, 0.05: 1.3, 0.10: 1.5, 0.15: 1.8, 0.20: 2.2,
+    0.25: 2.6, 0.30: 3.0, 0.35: 3.5, 0.40: 4.0,
+}
 
 
 def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
@@ -494,19 +497,19 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
         return None
 
     def _snap_disc(d):
-        if d < 0.07:
+        if d < 0.025:
             return 0.0
         return min(DISCOUNT_STEPS, key=lambda s: abs(s - d))
 
     def _estimate_velocity(base_vel, base_disc, target_disc, elasticity):
         if base_vel <= 0:
             return 0.1
-        if target_disc <= base_disc:
-            return base_vel  # not deepening discount
         disc_change = target_disc - base_disc
+        # Use elasticity for both directions when available
         if elasticity is not None and elasticity < -0.3:
             vol_change = -disc_change * elasticity
             return max(base_vel * (1 + vol_change), 0.1)
+        # Fallback: empirical lift table
         base_lift = EMPIRICAL_LIFT.get(_snap_disc(base_disc), 1.0)
         target_lift = EMPIRICAL_LIFT.get(target_disc, 1 + target_disc * 5)
         return max(base_vel * target_lift / max(base_lift, 0.1), 0.1)
@@ -538,12 +541,7 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
             if margin_per_unit <= 0 and step > 0:
                 continue  # skip unprofitable discount levels
 
-            if step <= actual_disc:
-                # Going up (reducing discount) — assume 25% volume loss per 10pp
-                vol_factor = max(1 - (actual_disc - step) * 2.5, 0.3)
-                est_vel = actual_vel * vol_factor
-            else:
-                est_vel = _estimate_velocity(actual_vel, actual_disc, step, elasticity)
+            est_vel = _estimate_velocity(actual_vel, actual_disc, step, elasticity)
 
             profit = margin_per_unit * est_vel
             if profit > best_profit:

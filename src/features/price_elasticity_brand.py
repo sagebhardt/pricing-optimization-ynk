@@ -94,8 +94,16 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10)
     """
     Estimate price elasticity per parent SKU using log-log OLS.
     Returns elasticity only when there's enough price variation.
+
+    Uses numpy arrays and np.linalg.lstsq directly (avoids pd.get_dummies
+    and sklearn overhead per iteration — critical for 6K+ parent SKUs).
     """
     results = []
+
+    # Pre-compute global month codes for one-hot encoding
+    unique_months = np.sort(data["month"].unique())
+    # Drop-first months for dummy encoding
+    month_codes = unique_months[1:] if len(unique_months) > 1 else np.array([], dtype=int)
 
     for parent, group in data.groupby("codigo_padre"):
         if len(group) < min_observations:
@@ -106,25 +114,31 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10)
         if price_cv < min_price_variation:
             continue
 
-        # Build regression: ln(Q) = b0 + b1*ln(P) + b2*month + b3*trend + store dummies
-        X_cols = ["ln_price"]
+        n = len(group)
 
-        # Month dummies
-        month_dummies = pd.get_dummies(group["month"], prefix="m", drop_first=True)
-        X = pd.concat([group[X_cols].reset_index(drop=True), month_dummies.reset_index(drop=True)], axis=1)
+        # Build feature matrix with numpy (no pd.get_dummies / pd.concat)
+        features = [group["ln_price"].values.reshape(-1, 1)]
 
-        # Store dummies
-        if group["centro"].nunique() > 1:
-            store_dummies = pd.get_dummies(group["centro"], prefix="s", drop_first=True)
-            X = pd.concat([X, store_dummies.reset_index(drop=True)], axis=1)
+        # Month dummies (one-hot, drop first)
+        g_months = group["month"].values
+        for m in month_codes:
+            features.append((g_months == m).astype(np.float64).reshape(-1, 1))
+
+        # Store dummies (one-hot, drop first — only for stores in this group)
+        stores = group["centro"].values
+        unique_stores = np.unique(stores)
+        if len(unique_stores) > 1:
+            for s in unique_stores[1:]:
+                features.append((stores == s).astype(np.float64).reshape(-1, 1))
 
         # Trend
-        X["trend"] = group["week_num"].values
+        features.append(group["week_num"].values.reshape(-1, 1))
 
+        X = np.hstack(features)
         y = group["ln_units"].values
 
         # Drop any NaN
-        mask = ~(X.isna().any(axis=1) | np.isnan(y))
+        mask = ~(np.isnan(X).any(axis=1) | np.isnan(y))
         X = X[mask]
         y = y[mask]
 
@@ -132,9 +146,16 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10)
             continue
 
         try:
-            reg = LinearRegression().fit(X, y)
-            elasticity = reg.coef_[0]  # Coefficient on ln_price
-            r2 = reg.score(X, y)
+            # Add intercept and solve with numpy (avoids sklearn overhead)
+            X_i = np.column_stack([np.ones(len(X)), X])
+            coefs, _, _, _ = np.linalg.lstsq(X_i, y, rcond=None)
+            elasticity = coefs[1]  # First feature after intercept = ln_price
+
+            # R-squared
+            y_pred = X_i @ coefs
+            ss_res = ((y - y_pred) ** 2).sum()
+            ss_tot = ((y - y.mean()) ** 2).sum()
+            r2 = float(1 - ss_res / max(ss_tot, 1e-10))
 
             # Confidence: based on R2, sample size, and price variation
             confidence = "high" if (r2 > 0.3 and len(X) > 30 and price_cv > 0.1) else \

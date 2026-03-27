@@ -157,6 +157,8 @@ def build_size_availability(txn, products):
     Track which sizes are 'available' per parent SKU-store-week.
     Fallback proxy: a size is available if it sold in the trailing 4-week window.
     Used when actual stock data is not available.
+
+    Vectorized implementation — avoids per-group Python loops.
     """
     sales = txn[txn["cantidad"] > 0].copy()
     sales["week"] = sales["fecha"].dt.to_period("W").dt.start_time
@@ -169,99 +171,106 @@ def build_size_availability(txn, products):
 
     # Only footwear (sizes are meaningful)
     footwear = sales[sales["primera_jerarquia"] == "Footwear"].copy()
+    if len(footwear) == 0:
+        return pd.DataFrame()
 
-    # Aggregate: which sizes sold per parent-store-week
+    # ── Step 1: Unique (parent, store, week, size) sales events ──
     size_sales = (
         footwear.groupby(["codigo_padre", "centro", "week", "talla"])["cantidad"]
-        .sum()
-        .reset_index()
+        .sum().reset_index()
+    )
+    print(f"    {len(size_sales):,} size-level sales events")
+
+    # ── Step 2: Expand forward — a size sold in week W is "active" in W..W+3 ──
+    key_cols = ["codigo_padre", "centro", "talla"]
+    expanded_frames = []
+    for offset in range(4):
+        tmp = size_sales[key_cols + ["week"]].copy()
+        tmp["week"] = tmp["week"] + pd.Timedelta(weeks=offset)
+        expanded_frames.append(tmp)
+    expanded = pd.concat(expanded_frames).drop_duplicates()
+    print(f"    {len(expanded):,} expanded active-size records")
+
+    # ── Step 3: Active sizes per parent-store-week ──
+    active_counts = (
+        expanded.groupby(["codigo_padre", "centro", "week"])["talla"]
+        .nunique().rename("active_sizes_4w").reset_index()
     )
 
-    # For each parent-store-week, compute rolling 4w size availability
-    all_weeks = sorted(size_sales["week"].unique())
-    parent_store_pairs = size_sales[["codigo_padre", "centro"]].drop_duplicates()
+    # ── Step 4: Core sizes active per parent-store-week ──
+    core_expanded = expanded[expanded["talla"].isin(CORE_SIZES)]
+    if len(core_expanded) > 0:
+        core_counts = (
+            core_expanded.groupby(["codigo_padre", "centro", "week"])["talla"]
+            .nunique().rename("core_sizes_active").reset_index()
+        )
+    else:
+        core_counts = pd.DataFrame(columns=["codigo_padre", "centro", "week", "core_sizes_active"])
 
-    results = []
+    # ── Step 5: Total sizes ever and core sizes ever per parent-store ──
+    total_ever = (
+        size_sales.groupby(["codigo_padre", "centro"])["talla"]
+        .nunique().rename("total_sizes_ever").reset_index()
+    )
+    core_sales = size_sales[size_sales["talla"].isin(CORE_SIZES)]
+    if len(core_sales) > 0:
+        core_ever = (
+            core_sales.groupby(["codigo_padre", "centro"])["talla"]
+            .nunique().rename("core_sizes_total").reset_index()
+        )
+    else:
+        core_ever = pd.DataFrame(columns=["codigo_padre", "centro", "core_sizes_total"])
 
-    for _, (parent, store) in parent_store_pairs.iterrows():
-        ps_data = size_sales[
-            (size_sales["codigo_padre"] == parent) & (size_sales["centro"] == store)
-        ]
+    # ── Step 6: Assemble result ──
+    result = active_counts.merge(total_ever, on=["codigo_padre", "centro"], how="left")
+    result = result.merge(core_counts, on=["codigo_padre", "centro", "week"], how="left")
+    result = result.merge(core_ever, on=["codigo_padre", "centro"], how="left")
 
-        # All sizes ever sold for this parent-store
-        all_sizes = set(ps_data["talla"].unique())
-        total_sizes = len(all_sizes)
-        core_sizes_available_total = all_sizes & CORE_SIZES
-        n_core_total = len(core_sizes_available_total)
+    result["core_sizes_active"] = result["core_sizes_active"].fillna(0).astype(int)
+    result["core_sizes_total"] = result["core_sizes_total"].fillna(0).astype(int)
+    result["lost_sizes"] = result["total_sizes_ever"] - result["active_sizes_4w"]
+    result["size_completeness"] = result["active_sizes_4w"] / result["total_sizes_ever"].clip(lower=1)
+    result["core_sizes_lost"] = result["core_sizes_total"] - result["core_sizes_active"]
+    result["core_completeness"] = np.where(
+        result["core_sizes_total"] > 0,
+        result["core_sizes_active"] / result["core_sizes_total"],
+        0.0,
+    )
 
-        # Get first and last week for this parent-store
-        first_week = ps_data["week"].min()
-        last_week = ps_data["week"].max()
+    # ── Step 7: Peak sizes (rolling 12-observation max of active_sizes_4w) ──
+    result = result.sort_values(["codigo_padre", "centro", "week"])
+    result["peak_sizes"] = (
+        result.groupby(["codigo_padre", "centro"])["active_sizes_4w"]
+        .transform(lambda x: x.rolling(12, min_periods=1).max())
+        .astype(int)
+    )
+    result["attrition_rate"] = 1 - (result["active_sizes_4w"] / result["peak_sizes"].clip(lower=1))
 
-        # Iterate through weeks
-        active_weeks = sorted(ps_data["week"].unique())
-        for i, week in enumerate(active_weeks):
-            # Trailing 4-week window
-            window_start = week - pd.Timedelta(weeks=3)
-            window_data = ps_data[
-                (ps_data["week"] >= window_start) & (ps_data["week"] <= week)
-            ]
+    # ── Step 8: Fragmentation index ──
+    expanded["talla_num"] = pd.to_numeric(
+        expanded["talla"].str.replace(",", "."), errors="coerce"
+    )
+    num_expanded = expanded.dropna(subset=["talla_num"])
 
-            active_sizes = set(window_data["talla"].unique())
-            n_active = len(active_sizes)
-            lost_sizes = all_sizes - active_sizes
-            n_lost = len(lost_sizes)
+    if len(num_expanded) > 0:
+        def _fragmentation(sizes):
+            vals = np.sort(sizes.values)
+            if len(vals) < 2:
+                return 0.0
+            gaps = np.diff(vals)
+            mean_gap = gaps.mean()
+            return float(gaps.std() / max(mean_gap, 0.01)) if mean_gap > 0 else 0.0
 
-            # Core size status
-            core_active = active_sizes & CORE_SIZES
-            core_lost = core_sizes_available_total - core_active
-            n_core_active = len(core_active)
-            n_core_lost = len(core_lost)
+        frag = (
+            num_expanded.groupby(["codigo_padre", "centro", "week"])["talla_num"]
+            .agg(_fragmentation).rename("fragmentation_index").reset_index()
+        )
+        result = result.merge(frag, on=["codigo_padre", "centro", "week"], how="left")
 
-            # Size attrition rate vs peak
-            peak_sizes = 0
-            for j in range(max(0, i - 12), i + 1):
-                w = active_weeks[j]
-                w_start = w - pd.Timedelta(weeks=3)
-                w_data = ps_data[(ps_data["week"] >= w_start) & (ps_data["week"] <= w)]
-                peak_sizes = max(peak_sizes, w_data["talla"].nunique())
+    result["fragmentation_index"] = result.get("fragmentation_index", pd.Series(0.0)).fillna(0.0)
+    result["source"] = "sales_proxy"
 
-            attrition_rate = 1 - (n_active / max(peak_sizes, 1))
-
-            # Size fragmentation: are remaining sizes contiguous or scattered?
-            numeric_sizes = []
-            for s in active_sizes:
-                try:
-                    numeric_sizes.append(float(s.replace(",", ".")))
-                except (ValueError, AttributeError):
-                    pass
-
-            if len(numeric_sizes) > 1:
-                numeric_sizes.sort()
-                gaps = [numeric_sizes[k+1] - numeric_sizes[k] for k in range(len(numeric_sizes)-1)]
-                fragmentation = np.std(gaps) / max(np.mean(gaps), 0.01)
-            else:
-                fragmentation = 0
-
-            results.append({
-                "codigo_padre": parent,
-                "centro": store,
-                "week": week,
-                "total_sizes_ever": total_sizes,
-                "active_sizes_4w": n_active,
-                "lost_sizes": n_lost,
-                "size_completeness": n_active / max(total_sizes, 1),
-                "peak_sizes": peak_sizes,
-                "attrition_rate": attrition_rate,
-                "core_sizes_total": n_core_total,
-                "core_sizes_active": n_core_active,
-                "core_sizes_lost": n_core_lost,
-                "core_completeness": n_core_active / max(n_core_total, 1),
-                "fragmentation_index": fragmentation,
-                "source": "sales_proxy",
-            })
-
-    return pd.DataFrame(results)
+    return result
 
 
 def analyze_size_markdown_relationship(size_df, lifecycle_df):

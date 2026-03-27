@@ -1,7 +1,7 @@
 # CLAUDE.md — YNK Pricing Optimization
 
 ## Project Overview
-ML-driven margin and pricing optimization for Yaneken Retail Group. Predicts optimal discount depth per parent SKU per store per week to maximize gross profit. Currently live for HOKA, BOLD, BAMERS, OAKLEY, and BELSPORT (pending first run).
+ML-driven margin and pricing optimization for Yaneken Retail Group. Predicts optimal discount depth per parent SKU per store per week to maximize gross profit. Currently live for HOKA, BOLD, BAMERS, OAKLEY, and BELSPORT.
 
 ## Quick Commands
 ```bash
@@ -24,16 +24,11 @@ python3 -m uvicorn api.main:app --port 8080
 # Start dashboard dev server
 cd dashboard && npm run dev
 
-# Deploy API (slim image, ~2 min build)
-gcloud builds submit . --tag us-central1-docker.pkg.dev/ynk-pricing-optimization/ynk-docker/pricing-api --project ynk-pricing-optimization
-gcloud run deploy pricing-api --image us-central1-docker.pkg.dev/ynk-pricing-optimization/ynk-docker/pricing-api --region us-central1 --project ynk-pricing-optimization --platform managed --memory 512Mi --cpu 1 --min-instances 1 --allow-unauthenticated --set-env-vars "PYTHONPATH=/app,GCS_BUCKET=ynk-pricing-decisions,GOOGLE_CLIENT_ID=467343668842-b1imqgobg3l6v6670tnir2nsis5pv56v.apps.googleusercontent.com"
-
-# Deploy pipeline image (for Cloud Run Jobs)
-# Must swap Dockerfile/dockerignore temporarily:
-cp .dockerignore .dockerignore.api && cp .dockerignore.pipeline .dockerignore && cp Dockerfile Dockerfile.api && cp Dockerfile.pipeline Dockerfile
-gcloud builds submit . --tag us-central1-docker.pkg.dev/ynk-pricing-optimization/ynk-docker/pricing-pipeline --project ynk-pricing-optimization
-cp Dockerfile.api Dockerfile && cp .dockerignore.api .dockerignore && rm Dockerfile.api .dockerignore.api
-gcloud run jobs update pricing-pipeline --image us-central1-docker.pkg.dev/ynk-pricing-optimization/ynk-docker/pricing-pipeline --region us-central1 --project ynk-pricing-optimization
+# Build + deploy (uses scripts/build.sh — safe swap with trap cleanup)
+./scripts/build.sh api --deploy        # API image + deploy to Cloud Run
+./scripts/build.sh pipeline --deploy   # Pipeline image + update Cloud Run Job
+./scripts/build.sh api                 # Build only (no deploy)
+./scripts/build.sh pipeline            # Build only (no deploy)
 ```
 
 ## Architecture
@@ -68,11 +63,11 @@ API (Cloud Run, slim image ~50MB):
 - **`pricing-api`** — slim API image (~50MB). No xgboost/shap/sklearn. Reads data from GCS.
 - **`pricing-pipeline`** — full pipeline image. Has ML deps + psycopg2. Runs as Cloud Run Job.
 - `.dockerignore` is for the API. `.dockerignore.pipeline` is for the pipeline.
-- **IMPORTANT**: when building the pipeline image, swap Dockerfiles temporarily (see Quick Commands).
+- Use `./scripts/build.sh pipeline` — handles the swap safely with `trap` cleanup.
 
 ## Cloud Infrastructure
 - **Cloud Run Service**: `pricing-api` (512 MiB, 1 CPU, min-instances=1)
-- **Cloud Run Job**: `pricing-pipeline` (32 GiB, 8 CPU, 1hr timeout)
+- **Cloud Run Job**: `pricing-pipeline` (32 GiB, 8 CPU, 2hr timeout)
 - **Cloud Scheduler**: `pricing-pipeline-weekly` (Monday 09:00 UTC / 6am CLT)
 - **GCS Bucket**: `gs://ynk-pricing-decisions`
 - **DB**: PostgreSQL at `190.54.179.91` (public) / `192.168.18.150` (office)
@@ -147,7 +142,7 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 | BOLD | BOLD | 35 | Revenue-based | 0.910 | No |
 | BAMERS | BAMERS | 25 | Revenue-based | 0.949 | No |
 | OAKLEY | OAKLEY | 8 | Revenue-based | 0.945 | No |
-| BELSPORT | BELSPORT | 66 | Pending first run | — | No |
+| BELSPORT | BELSPORT | 66 | Revenue-based | 0.917 | No |
 
 ## Adding a New Brand
 1. Add entry to `config/database.py` BRANDS dict (banner, brand codes, stores)
@@ -174,10 +169,15 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 - Admin panel: manage users/roles without deploys (gear icon)
 - Audit log: tracks all approve/reject/export actions
 
+## Pipeline Performance
+Belsport (largest brand, 9.2M transactions) completes in ~42 min. Key optimizations:
+- Elasticity: numpy arrays + `np.linalg.lstsq` instead of per-SKU `pd.get_dummies` + sklearn
+- Lifecycle: vectorized `np.select` + grid expansion instead of `iterrows` on 200K groups
+- Size curve: 4-week forward expansion + groupby instead of triple-nested loop
+- `.gcloudignore` excludes `/data/`, `/models/` etc. — build context 1 MiB vs 1 GiB
+
 ## Known Issues
-- Regressor R2 lower for margin-optimized targets (0.236 vs 0.363) — harder target, needs more data
 - Elasticity estimates conflated with markdown effects — consider excluding markdown periods
 - No holdout test set — final model trains on all data including validation folds
-- Belsport needs 32 GiB RAM for pipeline (9.2M transactions)
 - Belsport has no stock table yet (`stock_belsport` doesn't exist)
 - `ynk.precios_ofertas` still missing — blocks clean markdown event detection
