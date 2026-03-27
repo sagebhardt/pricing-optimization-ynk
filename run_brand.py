@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import gc
 import os
 import sys
 import time
@@ -113,6 +114,7 @@ def main():
         except Exception as e:
             print(f"\n  >> {step} FAILED: {e}")
             raise
+        gc.collect()  # free large intermediates between steps
 
     print(f"\n{'=' * 60}")
     print(f"{brand} pipeline completed in {time.time()-start:.1f}s")
