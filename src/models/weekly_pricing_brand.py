@@ -613,14 +613,16 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
         unit_cost = _get_cost(row["codigo_padre"])
 
-        # Margin calculations
+        # Margin calculations (strip IVA 19% — prices include tax, costs are net)
         if unit_cost:
-            current_margin_unit = current_final_rounded - unit_cost
-            rec_margin_unit = recommended_price - unit_cost
+            current_neto = current_final_rounded / 1.19
+            rec_neto = recommended_price / 1.19
+            current_margin_unit = current_neto - unit_cost
+            rec_margin_unit = rec_neto - unit_cost
             current_margin_weekly = current_margin_unit * velocity
             expected_margin_weekly = rec_margin_unit * expected_velocity
             margin_delta = int(expected_margin_weekly - current_margin_weekly)
-            rec_margin_pct = round(rec_margin_unit / recommended_price * 100, 1) if recommended_price > 0 else 0
+            rec_margin_pct = round(rec_margin_unit / rec_neto * 100, 1) if rec_neto > 0 else 0
             reasons.append(f"Margin recovery: {rec_margin_pct:.0f}% at new price")
         else:
             margin_delta = None
@@ -723,11 +725,12 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         # Margin calculations
         if unit_cost:
             # Block below-cost recommendations — step back to a shallower discount
-            if recommended_price < unit_cost:
-                # Find the shallowest discount that stays above cost
+            # Compare net (excl IVA) price against net cost
+            if recommended_price / 1.19 < unit_cost:
+                # Find the shallowest discount that stays above cost (net)
                 for step in DISCOUNT_STEPS:
                     candidate = snap_to_price_anchor(list_price * (1 - step), direction="nearest")
-                    if candidate >= unit_cost:
+                    if candidate / 1.19 >= unit_cost:
                         recommended_step = step
                         recommended_price = candidate
                         break
@@ -741,12 +744,14 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
                 expected_velocity = compute_expected_velocity(velocity, disc_rate, recommended_step, elasticity)
                 expected_weekly_rev = expected_velocity * recommended_price
 
-            current_margin_unit = current_final_rounded - unit_cost
-            rec_margin_unit = recommended_price - unit_cost
+            current_neto = current_final_rounded / 1.19
+            rec_neto = recommended_price / 1.19
+            current_margin_unit = current_neto - unit_cost
+            rec_margin_unit = rec_neto - unit_cost
             current_margin_weekly = current_margin_unit * velocity
             expected_margin_weekly = rec_margin_unit * expected_velocity
             margin_delta = int(expected_margin_weekly - current_margin_weekly)
-            rec_margin_pct = round(rec_margin_unit / recommended_price * 100, 1) if recommended_price > 0 else 0
+            rec_margin_pct = round(rec_margin_unit / rec_neto * 100, 1) if rec_neto > 0 else 0
 
             if rec_margin_pct < 20:
                 reasons.append(f"THIN MARGIN: {rec_margin_pct:.0f}% at recommended price")

@@ -537,7 +537,8 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
 
         for step in DISCOUNT_STEPS:
             price = list_price * (1 - step)
-            margin_per_unit = price - cost
+            price_neto = price / 1.19  # strip IVA for margin calc
+            margin_per_unit = price_neto - cost
             if margin_per_unit <= 0 and step > 0:
                 continue  # skip unprofitable discount levels
 
