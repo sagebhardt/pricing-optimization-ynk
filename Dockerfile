@@ -10,13 +10,9 @@ RUN pip install --no-cache-dir -r requirements-api.txt
 COPY api/ api/
 COPY config/ config/
 
-# Copy data files the API needs (small files only — .dockerignore filters the rest)
-# - training metadata (JSON, ~2KB per brand)
-# - weekly actions (CSV, ~200KB per brand)
-# - size curve alerts (parquet, ~50KB per brand)
-COPY models/ models/
-COPY weekly_actions/ weekly_actions/
-COPY data/processed/ data/processed/
+# API reads all data from GCS in production (no local data files needed).
+# Dirs are created empty so code doesn't error on path checks.
+RUN mkdir -p models weekly_actions data/processed
 
 EXPOSE 8080
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"]
