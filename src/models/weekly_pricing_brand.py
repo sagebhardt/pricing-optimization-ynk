@@ -37,6 +37,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 # Discount ladder (same across brands)
 DISCOUNT_STEPS = [0.0, 0.15, 0.20, 0.30, 0.40]
 
+# Minimum acceptable margin (%) after IVA — step back to shallower discount if breached
+MIN_MARGIN_PCT = 15
+
 CATEGORICAL_COLS = ["primera_jerarquia", "segunda_jerarquia", "genero", "grupo_etario"]
 EXCLUDE_COLS = [
     "sku", "centro", "week", "codigo_padre", "first_sale_date",
@@ -624,6 +627,8 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             margin_delta = int(expected_margin_weekly - current_margin_weekly)
             rec_margin_pct = round(rec_margin_unit / rec_neto * 100, 1) if rec_neto > 0 else 0
             reasons.append(f"Margin recovery: {rec_margin_pct:.0f}% at new price")
+            if rec_margin_pct < 20:
+                reasons.append(f"THIN MARGIN: {rec_margin_pct:.0f}% at recommended price")
         else:
             margin_delta = None
             rec_margin_pct = None
@@ -743,6 +748,36 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
                 reasons.append(f"Discount capped to protect margin (cost={unit_cost:,.0f})")
                 expected_velocity = compute_expected_velocity(velocity, disc_rate, recommended_step, elasticity)
                 expected_weekly_rev = expected_velocity * recommended_price
+
+            # Margin floor: step back to shallower discount if margin < MIN_MARGIN_PCT
+            rec_neto = recommended_price / 1.19
+            rec_margin_unit = rec_neto - unit_cost
+            rec_margin_pct = round(rec_margin_unit / rec_neto * 100, 1) if rec_neto > 0 else 0
+
+            if rec_margin_pct < MIN_MARGIN_PCT:
+                original_step = recommended_step
+                for step in DISCOUNT_STEPS:
+                    candidate = snap_to_price_anchor(list_price * (1 - step), direction="nearest")
+                    cand_neto = candidate / 1.19
+                    cand_margin = (cand_neto - unit_cost) / cand_neto * 100 if cand_neto > 0 else 0
+                    if cand_margin >= MIN_MARGIN_PCT:
+                        recommended_step = step
+                        recommended_price = candidate
+                        break
+                else:
+                    continue  # Can't meet margin floor at any discount — skip
+
+                # Margin floor may step back past current discount — no longer a markdown
+                if recommended_step <= current_step:
+                    continue
+
+                if abs(recommended_price - current_final_rounded) < 2000:
+                    continue
+
+                if recommended_step != original_step:
+                    reasons.append(f"Discount capped at {recommended_step:.0%} to protect margin (floor={MIN_MARGIN_PCT}%)")
+                    expected_velocity = compute_expected_velocity(velocity, disc_rate, recommended_step, elasticity)
+                    expected_weekly_rev = expected_velocity * recommended_price
 
             current_neto = current_final_rounded / 1.19
             rec_neto = recommended_price / 1.19

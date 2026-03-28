@@ -35,6 +35,20 @@ EXCLUDE_COLS = [
 
 CATEGORICAL_COLS = ["primera_jerarquia", "segunda_jerarquia", "genero", "grupo_etario"]
 
+# Brand-specific hyperparameter overrides.
+# BELSPORT: 2.8M samples with 66 heterogeneous stores — needs more capacity
+# and aggressive subsampling to reduce noise.
+# NOTE: Never put scale_pos_weight here — it's computed from data.
+BRAND_CLS_OVERRIDES = {
+    "BELSPORT": {"n_estimators": 500, "max_depth": 8, "subsample": 0.5, "colsample_bytree": 0.6},
+}
+BRAND_REG_OVERRIDES = {
+    "BELSPORT": {"n_estimators": 800, "max_depth": 9, "subsample": 0.5, "colsample_bytree": 0.6, "learning_rate": 0.02},
+}
+
+# Number of recent weeks to hold out for true out-of-time evaluation
+HOLDOUT_WEEKS = 4
+
 
 def _processed_dir(brand: str) -> Path:
     return PROJECT_ROOT / "data" / "processed" / brand.lower()
@@ -145,6 +159,22 @@ def train_brand_models(brand: str):
         print(f"\n  >>> REVENUE-BASED training (no costs — using historical markdown patterns)")
 
     # ================================================================
+    # Split holdout set (last HOLDOUT_WEEKS weeks reserved for out-of-time eval)
+    # ================================================================
+    all_weeks = sorted(df["week"].dropna().unique())
+    if len(all_weeks) > HOLDOUT_WEEKS + 4:
+        holdout_cutoff = all_weeks[-HOLDOUT_WEEKS]
+        df_train = df[df["week"] < holdout_cutoff].copy()
+        df_holdout = df[df["week"] >= holdout_cutoff].copy()
+        print(f"\n  Holdout split: {len(all_weeks)} weeks total, last {HOLDOUT_WEEKS} held out")
+        print(f"    Train: {len(df_train):,} rows ({len(all_weeks) - HOLDOUT_WEEKS} weeks)")
+        print(f"    Holdout: {len(df_holdout):,} rows ({HOLDOUT_WEEKS} weeks)")
+    else:
+        df_train = df
+        df_holdout = None
+        print(f"\n  Not enough weeks for holdout ({len(all_weeks)} total, need >{HOLDOUT_WEEKS + 4}) — using all data")
+
+    # ================================================================
     # Classifier
     # ================================================================
     print(f"\n{'=' * 60}")
@@ -152,7 +182,7 @@ def train_brand_models(brand: str):
     print(f"[{brand}] MODEL 1: {label}")
     print("=" * 60)
 
-    X, y, w, fcols = prepare(df, cls_target)
+    X, y, w, fcols = prepare(df_train, cls_target)
     print(f"  Features: {len(fcols)}")
     print(f"  Positive rate: {y.mean():.3f}")
 
@@ -163,9 +193,11 @@ def train_brand_models(brand: str):
         "subsample": 0.8,
         "colsample_bytree": 0.8,
         "scale_pos_weight": (1 - y.mean()) / y.mean(),
+        "eval_metric": "auc",
         "early_stopping_rounds": 20,
         "random_state": 42,
     }
+    cls_params.update(BRAND_CLS_OVERRIDES.get(brand, {}))
 
     cls_results = ts_cv(X, y, w, cls_params, n_splits=4, is_cls=True)
     v2_auc = np.mean([r["auc"] for r in cls_results])
@@ -184,17 +216,39 @@ def train_brand_models(brand: str):
     else:
         print()
 
-    # Train final model
-    final_cls_params = {k: v for k, v in cls_params.items() if k != "early_stopping_rounds"}
+    # Holdout evaluation for classifier
+    cls_holdout_metrics = None
+    if df_holdout is not None and cls_target in df_holdout.columns:
+        Xh, yh, _, _ = prepare(df_holdout, cls_target)
+        if len(Xh) > 0 and yh.nunique() > 1:
+            # Train on full train set, evaluate on holdout
+            holdout_cls = xgb.XGBClassifier(**{k: v for k, v in cls_params.items() if k not in ("early_stopping_rounds", "eval_metric")})
+            holdout_cls.fit(X, y, verbose=False)
+            pp_h = holdout_cls.predict_proba(Xh)[:, 1]
+            p_h = holdout_cls.predict(Xh)
+            cls_holdout_metrics = {
+                "auc": roc_auc_score(yh, pp_h),
+                "avg_precision": average_precision_score(yh, pp_h),
+                "precision": precision_score(yh, p_h, zero_division=0),
+                "recall": recall_score(yh, p_h, zero_division=0),
+                "f1": f1_score(yh, p_h, zero_division=0),
+                "n_samples": len(Xh),
+            }
+            print(f"\n  HOLDOUT ({HOLDOUT_WEEKS}w): AUC={cls_holdout_metrics['auc']:.3f} AP={cls_holdout_metrics['avg_precision']:.3f} P={cls_holdout_metrics['precision']:.3f} R={cls_holdout_metrics['recall']:.3f}")
+
+    # Train final model on ALL data (train + holdout) for production
+    X_all, y_all, _, fcols_all = prepare(df, cls_target)
+    final_cls_params = {k: v for k, v in cls_params.items() if k not in ("early_stopping_rounds", "eval_metric")}
+    final_cls_params["scale_pos_weight"] = (1 - y_all.mean()) / y_all.mean()
     cls_model = xgb.XGBClassifier(**final_cls_params)
-    cls_model.fit(X, y, verbose=False)
+    cls_model.fit(X_all, y_all, verbose=False)
 
     # SHAP
     explainer = shap.TreeExplainer(cls_model)
-    X_sample = X.sample(min(2000, len(X)), random_state=42)
+    X_sample = X_all.sample(min(2000, len(X_all)), random_state=42)
     sv = explainer.shap_values(X_sample)
     shap_cls = pd.DataFrame({
-        "feature": fcols,
+        "feature": fcols_all,
         "mean_abs_shap": np.abs(sv).mean(axis=0),
     }).sort_values("mean_abs_shap", ascending=False)
     shap_cls.to_csv(model_dir / "classifier_shap.csv", index=False)
@@ -214,11 +268,12 @@ def train_brand_models(brand: str):
     print("=" * 60)
 
     if has_margin_targets:
-        # Train on ALL rows with margin targets — includes "already optimal" as signal
-        df_disc = df[df["optimal_disc_margin"].notna()].copy()
+        df_disc_train = df_train[df_train["optimal_disc_margin"].notna()].copy()
+        df_disc_all = df[df["optimal_disc_margin"].notna()].copy()
     else:
-        df_disc = df[df["will_discount_4w"] == 1].copy()
-    X, y, w, fcols = prepare(df_disc, reg_target)
+        df_disc_train = df_train[df_train["will_discount_4w"] == 1].copy()
+        df_disc_all = df[df["will_discount_4w"] == 1].copy()
+    X, y, w, fcols = prepare(df_disc_train, reg_target)
     print(f"  Features: {len(fcols)}")
     print(f"  Samples: {len(X):,}")
     print(f"  Target stats: mean={y.mean():.4f} std={y.std():.4f} min={y.min():.4f} max={y.max():.4f}")
@@ -232,9 +287,11 @@ def train_brand_models(brand: str):
         "colsample_bytree": 0.7,
         "reg_alpha": 0.1,
         "reg_lambda": 1.0,
+        "eval_metric": "rmse",
         "early_stopping_rounds": 30,
         "random_state": 42,
     }
+    reg_params.update(BRAND_REG_OVERRIDES.get(brand, {}))
 
     reg_results = ts_cv(X, y, w, reg_params, n_splits=4, is_cls=False)
     v2_mae = np.mean([r["mae"] for r in reg_results])
@@ -253,15 +310,37 @@ def train_brand_models(brand: str):
     else:
         print()
 
-    final_reg_params = {k: v for k, v in reg_params.items() if k != "early_stopping_rounds"}
+    # Holdout evaluation for regressor
+    reg_holdout_metrics = None
+    if df_holdout is not None and reg_target in df_holdout.columns:
+        if has_margin_targets:
+            df_disc_holdout = df_holdout[df_holdout["optimal_disc_margin"].notna()].copy()
+        else:
+            df_disc_holdout = df_holdout[df_holdout["will_discount_4w"] == 1].copy()
+        Xh, yh, _, _ = prepare(df_disc_holdout, reg_target)
+        if len(Xh) > 0:
+            holdout_reg = xgb.XGBRegressor(**{k: v for k, v in reg_params.items() if k not in ("early_stopping_rounds", "eval_metric")})
+            holdout_reg.fit(X, y, verbose=False)
+            p_h = holdout_reg.predict(Xh)
+            reg_holdout_metrics = {
+                "mae": float(mean_absolute_error(yh, p_h)),
+                "rmse": float(np.sqrt(mean_squared_error(yh, p_h))),
+                "r2": float(r2_score(yh, p_h)),
+                "n_samples": len(Xh),
+            }
+            print(f"\n  HOLDOUT ({HOLDOUT_WEEKS}w): MAE={reg_holdout_metrics['mae']:.4f} ({reg_holdout_metrics['mae']*100:.1f}pp) R2={reg_holdout_metrics['r2']:.3f}")
+
+    # Train final model on ALL data for production
+    X_all_reg, y_all_reg, _, fcols_reg = prepare(df_disc_all, reg_target)
+    final_reg_params = {k: v for k, v in reg_params.items() if k not in ("early_stopping_rounds", "eval_metric")}
     reg_model = xgb.XGBRegressor(**final_reg_params)
-    reg_model.fit(X, y, verbose=False)
+    reg_model.fit(X_all_reg, y_all_reg, verbose=False)
 
     explainer = shap.TreeExplainer(reg_model)
-    X_sample = X.sample(min(2000, len(X)), random_state=42)
+    X_sample = X_all_reg.sample(min(2000, len(X_all_reg)), random_state=42)
     sv = explainer.shap_values(X_sample)
     shap_reg = pd.DataFrame({
-        "feature": fcols,
+        "feature": fcols_reg,
         "mean_abs_shap": np.abs(sv).mean(axis=0),
     }).sort_values("mean_abs_shap", ascending=False)
     shap_reg.to_csv(model_dir / "regressor_shap.csv", index=False)
@@ -278,7 +357,8 @@ def train_brand_models(brand: str):
             "cv_results": cls_results,
             "avg_auc": v2_auc,
             "avg_precision": v2_ap,
-            "n_features": len(X.columns),
+            "n_features": len(fcols_all),
+            "holdout": cls_holdout_metrics,
             "improvement_vs_v1": {
                 "auc_delta": v2_auc - v1_auc if v1_auc else None,
                 "ap_delta": v2_ap - v1_ap if v1_ap else None,
@@ -288,7 +368,8 @@ def train_brand_models(brand: str):
             "cv_results": reg_results,
             "avg_mae": v2_mae,
             "avg_r2": v2_r2,
-            "n_samples": len(X),
+            "n_samples": len(X_all_reg),
+            "holdout": reg_holdout_metrics,
             "improvement_vs_v1": {
                 "mae_delta": v2_mae - v1_mae if v1_mae else None,
                 "r2_delta": v2_r2 - v1_r2 if v1_r2 else None,

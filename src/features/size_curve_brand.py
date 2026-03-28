@@ -366,11 +366,13 @@ def run_size_curve_for_brand(brand: str):
         print(f"    Core completeness: {has_core['core_completeness'].mean():.1%}")
         print(f"    Parent SKUs with any core loss: {(has_core.groupby('codigo_padre')['core_sizes_lost'].max() > 0).sum()}")
 
-    # Alerts
+    # Alerts — only keep latest week to avoid bloated output
+    # (BELSPORT: 3.4M rows across all weeks vs ~50K for latest week only)
     print(f"\n[{brand}] Generating size curve alerts...")
-    alerts = build_size_alerts(size_df)
+    latest_week = size_df["week"].max()
+    alerts = build_size_alerts(size_df[size_df["week"] == latest_week])
     alerts.to_parquet(processed / "size_curve_alerts.parquet", index=False)
-    print(f"  {len(alerts):,} alert rows")
+    print(f"  {len(alerts):,} alert rows (week {latest_week.date()})")
     print(f"  {alerts['codigo_padre'].nunique()} parent SKUs with alerts")
 
     # Relationship with markdown
@@ -403,7 +405,6 @@ def run_size_curve_for_brand(brand: str):
         print("  (Lifecycle data not available -- run lifecycle_brand.py first)")
 
     # Most at-risk parent SKUs right now
-    latest_week = size_df["week"].max()
     current = size_df[size_df["week"] == latest_week].sort_values("attrition_rate", ascending=False)
     print(f"\n  Current week ({latest_week.date()}) -- Most depleted parent SKUs:")
     print(f"  {'Parent SKU':<25} {'Store':>6} {'Active':>6} {'Peak':>5} {'Attrition':>10} {'Core Active':>11}")

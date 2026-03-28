@@ -83,7 +83,7 @@ STOCK_TABLES = {
     "BOLD": "public.stock_bold",
     "BAMERS": "public.stock_bamers",
     "OAKLEY": "public.stock_oakley",
-    "BELSPORT": "public.stock_belsport",
+    "BELSPORT": "public.stock_belsport",  # Table does not exist yet — falls back to sales proxy
 }
 
 # Backwards compatibility

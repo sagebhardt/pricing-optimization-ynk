@@ -120,6 +120,9 @@ All brands use margin-optimized training:
 - Regressor: "What discount maximizes weekly gross profit?" (optimal)
 - Targets computed by simulating profit at each of 9 discount steps (0-40%, 5pp increments)
 - Margin calculations strip IVA (19%) — `price_neto = price / 1.19` before subtracting cost
+- **Holdout evaluation**: last 4 weeks reserved for true out-of-time test (reported in `training_metadata.json`)
+- **Brand-specific tuning**: BELSPORT uses deeper trees + aggressive subsampling (see `BRAND_*_OVERRIDES` in `train_brand.py`)
+- Early stopping (AUC for classifier, RMSE for regressor) used during CV and holdout eval; final production models train for the full `n_estimators`
 
 ## Cost Data Sources
 Costs are loaded in order of precedence:
@@ -129,7 +132,8 @@ Costs are loaded in order of precedence:
 ## Margin-Aware Pricing
 - All margin calculations strip IVA (19%): `margin = price/1.19 - cost`
 - Never recommends below cost (steps back to shallowest profitable discount)
-- Flags thin margins (<20%) in reasons
+- **Minimum margin floor (15%)**: steps back to shallower discount if recommended margin < 15%
+- Flags thin margins (<20%) in reasons (both decrease and increase paths)
 - Premium pricing above list price allowed when velocity >= 2 u/w (flagged SPECULATIVE)
 - Dashboard shows: margin %, margin delta/week, color-coded (green >40%, amber 20-40%, red <20%)
 - KPI bar shows revenue AND margin impact side by side
@@ -190,7 +194,8 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 
 ## Known Issues
 - Elasticity estimates conflated with markdown effects — consider excluding markdown periods
-- No holdout test set — final model trains on all data including validation folds
-- Belsport has no stock table yet (`stock_belsport` doesn't exist)
+- Belsport has no stock table yet (`stock_belsport` doesn't exist) — uses sales proxy for size curve
 - `ynk.precios_ofertas` still missing — blocks clean markdown event detection
 - ti.productos costs have mixed currencies (USD/CLP) — using 1000x heuristic for conversion
+- BELSPORT regressor R2=0.442 is weak — 66 heterogeneous stores with no stock data create noise
+- Size curve alerts filtered to latest week only (BELSPORT was generating 3.4M rows across all weeks)
