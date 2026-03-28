@@ -1,7 +1,7 @@
 # CLAUDE.md — YNK Pricing Optimization
 
 ## Project Overview
-ML-driven margin and pricing optimization for Yaneken Retail Group. Predicts optimal discount depth per parent SKU per store per week to maximize gross profit. Currently live for HOKA, BOLD, BAMERS, OAKLEY, and BELSPORT.
+ML-driven margin and pricing optimization for Yaneken Retail Group. Predicts optimal discount depth per parent SKU per store per week to maximize gross profit. All 5 brands are live with margin-optimized models: HOKA, BOLD, BAMERS, OAKLEY, and BELSPORT.
 
 ## Quick Commands
 ```bash
@@ -11,7 +11,7 @@ python run_brand.py BOLD
 python run_brand.py BELSPORT
 
 # Run specific steps
-python run_brand.py HOKA --steps features enhance aggregate train pricing sync
+python run_brand.py HOKA --steps elasticity features enhance aggregate train pricing sync
 
 # Run pipeline in the cloud (no laptop needed)
 gcloud run jobs execute pricing-pipeline --region us-central1 --project ynk-pricing-optimization
@@ -35,25 +35,24 @@ cd dashboard && npm run dev
 ```
 Pipeline (runs in Cloud Run Job, Monday 6am CLT):
   run_brand.py                    # Pipeline orchestrator (per brand)
-  run_pipeline_job.py             # Cloud Run Job entrypoint (all brands)
-  run_weekly.sh                   # Legacy local automation (replaced by Job)
-  src/data/extract_brand.py       # PostgreSQL → parquet (graceful stock table handling)
+  run_pipeline_job.py             # Cloud Run Job entrypoint (subprocess per brand)
+  src/data/extract_brand.py       # PostgreSQL → parquet + costs from ti.productos
   src/features/
+    price_elasticity_brand.py     # Log-log demand elasticity (runs BEFORE features)
     build_features_brand.py       # Base features + official prices + margin targets
-    price_elasticity_brand.py     # Log-log demand elasticity
     lifecycle_brand.py            # Launch→Growth→Peak→Steady→Decline→Clearance
     size_curve_brand.py           # Size depletion tracking + alerts
     build_enhanced_brand.py       # Merge all → v2 features
     aggregate_parent.py           # Child → parent SKU aggregation (incl margin targets)
   src/models/
-    train_brand.py                # XGBoost with margin-optimized or revenue-based targets
-    weekly_pricing_brand.py       # Weekly actions (margin-aware, cost floor, confidence tiers)
+    train_brand.py                # XGBoost with margin-optimized targets
+    weekly_pricing_brand.py       # Weekly actions (IVA-adjusted margins, cost floor, tiers)
 
 API (Cloud Run, slim image ~50MB):
   Dockerfile                      # API image (no ML deps, no data)
   Dockerfile.pipeline             # Pipeline image (full ML + DB deps)
   api/main.py                     # FastAPI (auth, decisions, export, admin, audit, feedback)
-  api/storage.py                  # GCS-backed reads (pricing actions, alerts, metadata) + persistence
+  api/storage.py                  # GCS-backed reads (pricing actions, alerts, metadata)
   config/auth.py                  # Google SSO roles, GCS-backed user config with cache
   config/database.py              # DB config, brand configs, store exclusions
   dashboard/src/App.jsx           # React dashboard (pagination, margin viz, admin panel)
@@ -63,6 +62,7 @@ API (Cloud Run, slim image ~50MB):
 - **`pricing-api`** — slim API image (~50MB). No xgboost/shap/sklearn. Reads data from GCS.
 - **`pricing-pipeline`** — full pipeline image. Has ML deps + psycopg2. Runs as Cloud Run Job.
 - `.dockerignore` is for the API. `.dockerignore.pipeline` is for the pipeline.
+- `.gcloudignore` excludes `/data/`, `/models/` etc. — build context ~1 MiB.
 - Use `./scripts/build.sh pipeline` — handles the swap safely with `trap` cleanup.
 
 ## Cloud Infrastructure
@@ -86,6 +86,7 @@ API (Cloud Run, slim image ~50MB):
 
 ## Persistence & Storage (GCS)
 - Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/`
+- Supplemental data: `data/raw/{brand}/costs.parquet`, `official_prices.parquet`
 - Decisions: `decisions/{brand}/decisions_{week}.json`
 - Audit log: `audit/{brand}/{YYYY-MM}.jsonl`
 - Exports: `exports/{brand}/cambios_precio_{brand}_{week}.xlsx`
@@ -96,30 +97,37 @@ API (Cloud Run, slim image ~50MB):
 ## Data Flow
 ```
 DB (PostgreSQL) → extract → parquet (local)
-                → features (+ official prices + costs) → parquet
-                → elasticity / lifecycle / size_curve → enhance → aggregate
-                → train (margin-optimized if costs available)
-                → pricing (cost floor, confidence tiers, margin columns)
-                → sync to GCS
-                → API serves from GCS → Dashboard
+               → costs from ti.productos (auto USD→CLP conversion)
+               → costs/official_prices from GCS (HOKA override)
+               → elasticity (BEFORE features — needed for margin targets)
+               → features (+ official prices + margin targets using elasticity)
+               → lifecycle / size_curve → enhance → aggregate
+               → train (margin-optimized for all brands)
+               → pricing (IVA-adjusted cost floor, confidence tiers, margin columns)
+               → sync to GCS
+               → API serves from GCS → Dashboard
 ```
 
-## Training Modes
-The model auto-detects which mode to use based on available data:
+## Step Order (Important)
+```
+extract → elasticity → features → lifecycle → size_curve → enhance → aggregate → train → pricing → sync
+```
+Elasticity MUST run before features because `add_margin_targets` reads elasticity data from disk to estimate velocity at different discount levels. On fresh containers, running features first produces low-variance targets (everything clusters at 30-35% discount).
 
-### Margin-Optimized (when `costs.parquet` exists)
+## Training Mode
+All brands use margin-optimized training:
 - Classifier: "Should this product be repriced?" (prescriptive)
 - Regressor: "What discount maximizes weekly gross profit?" (optimal)
-- Targets computed by simulating profit at each discount step
-- HOKA: AUC 0.978, +$23.8M margin/week
+- Targets computed by simulating profit at each of 9 discount steps (0-40%, 5pp increments)
+- Margin calculations strip IVA (19%) — `price_neto = price / 1.19` before subtracting cost
 
-### Revenue-Based (legacy, when no costs)
-- Classifier: "Will this product markdown in 4 weeks?" (descriptive)
-- Regressor: "What discount depth will be applied?" (predictive)
-- BOLD/BAMERS/OAKLEY use this until costs are provided
+## Cost Data Sources
+Costs are loaded in order of precedence:
+1. **GCS** (`gs://ynk-pricing-decisions/data/raw/{brand}/costs.parquet`) — manually uploaded, highest quality. Used for HOKA.
+2. **ti.productos** (DB table) — auto-extracted during pipeline. Costs < 500 are treated as USD and multiplied by 1,000 (calibrated against known HOKA costs, median rate 1,013 CLP/USD). Used for BOLD, BAMERS, OAKLEY, BELSPORT.
 
 ## Margin-Aware Pricing
-When costs available:
+- All margin calculations strip IVA (19%): `margin = price/1.19 - cost`
 - Never recommends below cost (steps back to shallowest profitable discount)
 - Flags thin margins (<20%) in reasons
 - Premium pricing above list price allowed when velocity >= 2 u/w (flagged SPECULATIVE)
@@ -136,27 +144,22 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 - **SPECULATIVE**: Price increases without elasticity, or premium pricing above list
 
 ## Active Brands
-| Brand | Banner | Stores | Training Mode | Classifier AUC | Cost Data |
-|-------|--------|--------|---------------|----------------|-----------|
-| HOKA | HOKA | 3 | Margin-optimized | 0.978 | Yes (376 SKUs) |
-| BOLD | BOLD | 35 | Revenue-based | 0.910 | No |
-| BAMERS | BAMERS | 25 | Revenue-based | 0.949 | No |
-| OAKLEY | OAKLEY | 8 | Revenue-based | 0.945 | No |
-| BELSPORT | BELSPORT | 66 | Revenue-based | 0.917 | No |
+| Brand | Banner | Stores | Training Mode | Regressor R2 | Cost Source |
+|-------|--------|--------|---------------|-------------|-------------|
+| HOKA | HOKA | 3 | Margin-optimized | 0.781 | GCS (376 SKUs) |
+| BOLD | BOLD | 35 | Margin-optimized | 0.648 | ti.productos (5,434 SKUs) |
+| BAMERS | BAMERS | 25 | Margin-optimized | 0.938 | ti.productos (2,084 SKUs) |
+| OAKLEY | OAKLEY | 8 | Margin-optimized | 0.800 | ti.productos (2,211 SKUs) |
+| BELSPORT | BELSPORT | 66 | Margin-optimized | 0.442 | ti.productos (6,422 SKUs) |
 
 ## Adding a New Brand
 1. Add entry to `config/database.py` BRANDS dict (banner, brand codes, stores)
 2. Add stock table to STOCK_TABLES (if exists)
 3. Add non-retail stores to EXCLUDE_STORES_PRICING
 4. Add brand tab to `dashboard/src/App.jsx` BRANDS, BRAND_STATS, ALL_BRANDS
-5. Run pipeline: `gcloud run jobs execute pricing-pipeline --update-env-vars "PIPELINE_BRANDS=NEWBRAND"`
-6. Optional: add `costs.parquet` and `official_prices.parquet` to `data/raw/{brand}/`
-
-## Adding Cost Data (Enables Margin Optimization)
-1. Get cost list (Excel with SKU + unit cost)
-2. Save as `data/raw/{brand}/costs.parquet` (columns: `sku`, `cost`)
-3. Re-run pipeline — model auto-switches to margin-optimized training
-4. Dashboard will show margin columns automatically
+5. Add brand to `run_pipeline_job.py` BRANDS default list
+6. Run pipeline: `gcloud run jobs execute pricing-pipeline --update-env-vars "PIPELINE_BRANDS=NEWBRAND"`
+7. Costs auto-extracted from `ti.productos`. For manual override: upload `costs.parquet` to GCS.
 
 ## Dashboard UX
 - Pagination: 50 items/page with top + bottom navigation
@@ -170,14 +173,24 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 - Audit log: tracks all approve/reject/export actions
 
 ## Pipeline Performance
-Belsport (largest brand, 9.2M transactions) completes in ~42 min. Key optimizations:
+Each brand runs as a subprocess (memory fully reclaimed between brands). Stock extraction limited to last 16 weeks. Key optimizations:
 - Elasticity: numpy arrays + `np.linalg.lstsq` instead of per-SKU `pd.get_dummies` + sklearn
-- Lifecycle: vectorized `np.select` + grid expansion instead of `iterrows` on 200K groups
-- Size curve: 4-week forward expansion + groupby instead of triple-nested loop
-- `.gcloudignore` excludes `/data/`, `/models/` etc. — build context 1 MiB vs 1 GiB
+- Lifecycle: per-group processing with `np.select` (constant memory, no `iterrows`)
+- Size curve: vectorized for both stock-based and sales-proxy paths
+- Build context: `.gcloudignore` with root-anchored paths — 1 MiB vs 1 GiB
+- Library versions pinned in `requirements.txt` for reproducible training
+
+| Brand | Pipeline Time |
+|-------|--------------|
+| HOKA | ~2 min |
+| BOLD | ~35 min |
+| BAMERS | ~12 min |
+| OAKLEY | ~4 min |
+| BELSPORT | ~42 min |
 
 ## Known Issues
 - Elasticity estimates conflated with markdown effects — consider excluding markdown periods
 - No holdout test set — final model trains on all data including validation folds
 - Belsport has no stock table yet (`stock_belsport` doesn't exist)
 - `ynk.precios_ofertas` still missing — blocks clean markdown event detection
+- ti.productos costs have mixed currencies (USD/CLP) — using 1000x heuristic for conversion
