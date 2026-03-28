@@ -160,13 +160,12 @@ def compute_expected_velocity(current_vel, current_disc, new_disc, elasticity):
     if new_disc <= current_disc:
         return current_vel  # Not deepening discount, no lift expected
 
-    # Discount change
-    disc_change = new_disc - current_disc
+    # True price change %: going from 20% off to 30% off is a 12.5% price drop, not 10%
+    price_change_pct = (new_disc - current_disc) / max(1 - current_disc, 0.01)
 
     if elasticity is not None and elasticity < -0.3:
         # Use elasticity: price change % -> volume change %
-        price_change_pct = -disc_change  # Negative = price decrease
-        volume_change = price_change_pct * elasticity  # Elasticity is negative, so double negative = positive
+        volume_change = -price_change_pct * elasticity  # Elasticity is negative, price_change positive -> positive lift
         return max(current_vel * (1 + volume_change), 0.5)
     else:
         # Empirical fallback: observed lift patterns

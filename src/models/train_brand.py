@@ -195,11 +195,12 @@ def train_brand_models(brand: str):
         "scale_pos_weight": (1 - y.mean()) / y.mean(),
         "eval_metric": "auc",
         "early_stopping_rounds": 20,
+        "n_jobs": -1,
         "random_state": 42,
     }
     cls_params.update(BRAND_CLS_OVERRIDES.get(brand, {}))
 
-    cls_results = ts_cv(X, y, w, cls_params, n_splits=4, is_cls=True)
+    cls_results = ts_cv(X, y, w, cls_params, n_splits=2, is_cls=True)
     v2_auc = np.mean([r["auc"] for r in cls_results])
     v2_ap = np.mean([r["avg_precision"] for r in cls_results])
 
@@ -289,11 +290,12 @@ def train_brand_models(brand: str):
         "reg_lambda": 1.0,
         "eval_metric": "rmse",
         "early_stopping_rounds": 30,
+        "n_jobs": -1,
         "random_state": 42,
     }
     reg_params.update(BRAND_REG_OVERRIDES.get(brand, {}))
 
-    reg_results = ts_cv(X, y, w, reg_params, n_splits=4, is_cls=False)
+    reg_results = ts_cv(X, y, w, reg_params, n_splits=2, is_cls=False)
     v2_mae = np.mean([r["mae"] for r in reg_results])
     v2_r2 = np.mean([r["r2"] for r in reg_results])
 

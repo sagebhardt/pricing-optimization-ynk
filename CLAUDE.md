@@ -72,7 +72,7 @@ API (Cloud Run, slim image ~50MB):
 - **GCS Bucket**: `gs://ynk-pricing-decisions`
 - **DB**: PostgreSQL at `190.54.179.91` (public) / `192.168.18.150` (office)
 - **GCP Project**: `ynk-pricing-optimization`
-- **Estimated cost**: ~$3-5/month total
+- **Estimated cost**: ~$9/month total (API ~$5 with min-instances=0, pipeline ~$3, GCS negligible)
 
 ## Authentication & Roles
 - Google SSO via OAuth2 (Google Identity Services)

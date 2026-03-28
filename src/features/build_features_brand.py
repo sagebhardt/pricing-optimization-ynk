@@ -501,60 +501,73 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
             return 0.0
         return min(DISCOUNT_STEPS, key=lambda s: abs(s - d))
 
-    def _estimate_velocity(base_vel, base_disc, target_disc, elasticity):
-        if base_vel <= 0:
-            return 0.1
-        disc_change = target_disc - base_disc
-        # Use elasticity for both directions when available
-        if elasticity is not None and elasticity < -0.3:
-            vol_change = -disc_change * elasticity
-            return max(base_vel * (1 + vol_change), 0.1)
-        # Fallback: empirical lift table
-        base_lift = EMPIRICAL_LIFT.get(_snap_disc(base_disc), 1.0)
-        target_lift = EMPIRICAL_LIFT.get(target_disc, 1 + target_disc * 5)
-        return max(base_vel * target_lift / max(base_lift, 0.1), 0.1)
-
-    # Vectorized would be ideal but the logic is complex — use apply
-    results = []
+    # Vectorized: simulate profit at all 9 discount steps via NumPy broadcasting
     parent_col = "codigo_padre" if "codigo_padre" in weekly.columns else "sku"
+    steps = np.array(DISCOUNT_STEPS)  # (9,)
 
-    for _, row in weekly.iterrows():
-        sku = row.get(parent_col, row.get("sku", ""))
-        list_price = row.get("avg_precio_lista", 0)
-        actual_disc = row.get("discount_rate", 0)
-        actual_vel = row.get("velocity_4w", 0)
-        cost = _get_cost(sku)
+    # Map SKU → cost using prefix matching
+    skus = weekly[parent_col].fillna(weekly.get("sku", "")).values
+    costs = np.array([_get_cost(s) or np.nan for s in skus])  # (N,)
 
-        if not cost or pd.isna(list_price) or list_price <= 0 or pd.isna(actual_vel) or actual_vel <= 0:
-            results.append((np.nan, np.nan, np.nan))
-            continue
+    list_prices = weekly["avg_precio_lista"].values.astype(float)  # (N,)
+    actual_disc = np.where(np.isnan(weekly["discount_rate"].values), 0, weekly["discount_rate"].values)  # (N,)
+    actual_vel = weekly["velocity_4w"].values.astype(float)  # (N,)
 
-        actual_disc = actual_disc if pd.notna(actual_disc) else 0
-        elasticity = elast_map.get(sku)
+    # Elasticity lookup
+    elast = np.array([elast_map.get(s, np.nan) for s in skus])  # (N,)
+    has_elast = np.isfinite(elast) & (elast < -0.3)  # (N,)
 
-        best_profit = -float("inf")
-        best_step = _snap_disc(actual_disc)
+    # Valid mask: has cost, positive list price, positive velocity
+    valid = np.isfinite(costs) & (costs > 0) & np.isfinite(list_prices) & (list_prices > 0) & np.isfinite(actual_vel) & (actual_vel > 0)
+    N = len(weekly)
 
-        for step in DISCOUNT_STEPS:
-            price = list_price * (1 - step)
-            price_neto = price / 1.19  # strip IVA for margin calc
-            margin_per_unit = price_neto - cost
-            if margin_per_unit <= 0 and step > 0:
-                continue  # skip unprofitable discount levels
+    # Broadcast: prices (N, 9), margin (N, 9)
+    prices_neto = (list_prices[:, None] * (1 - steps[None, :])) / 1.19  # (N, 9)
+    margin_unit = prices_neto - costs[:, None]  # (N, 9)
 
-            est_vel = _estimate_velocity(actual_vel, actual_disc, step, elasticity)
+    # Velocity estimation at each step: (N, 9)
+    # True price change % from current discount to each target step
+    price_change_pct = (steps[None, :] - actual_disc[:, None]) / np.maximum(1 - actual_disc[:, None], 0.01)  # (N, 9)
 
-            profit = margin_per_unit * est_vel
-            if profit > best_profit:
-                best_profit = profit
-                best_step = step
+    # Elasticity-based velocity
+    vol_change = -price_change_pct * elast[:, None]  # (N, 9)
+    vel_elast = np.maximum(actual_vel[:, None] * (1 + vol_change), 0.1)  # (N, 9)
 
-        current_step = _snap_disc(actual_disc)
-        should_reprice = 1 if best_step != current_step else 0
-        results.append((best_step, should_reprice, best_profit))
+    # Empirical lift table velocity (fallback)
+    snap_steps = np.array([_snap_disc(d) for d in actual_disc])  # (N,)
+    base_lift = np.array([EMPIRICAL_LIFT.get(s, 1.0) for s in snap_steps])  # (N,)
+    target_lift = np.array([EMPIRICAL_LIFT.get(s, 1 + s * 5) for s in steps])  # (9,)
+    vel_lift = np.maximum(actual_vel[:, None] * target_lift[None, :] / np.maximum(base_lift[:, None], 0.1), 0.1)  # (N, 9)
 
-    margin_df = pd.DataFrame(results, columns=["optimal_disc_margin", "should_reprice", "optimal_profit"],
-                              index=weekly.index)
+    # Select: elasticity where available, lift table otherwise
+    velocity = np.where(has_elast[:, None], vel_elast, vel_lift)  # (N, 9)
+
+    # Profit (N, 9)
+    profit = margin_unit * velocity
+
+    # Mask unprofitable steps (margin <= 0 at step > 0)
+    unprofitable = (margin_unit <= 0) & (steps[None, :] > 0)
+    profit = np.where(unprofitable, -np.inf, profit)
+
+    # Find best step per row
+    best_idx = np.argmax(profit, axis=1)  # (N,)
+    best_step = steps[best_idx]  # (N,)
+    best_profit = profit[np.arange(N), best_idx]  # (N,)
+
+    # Snap current discount to step
+    current_step = np.array([_snap_disc(d) for d in actual_disc])  # (N,)
+    should_reprice = (best_step != current_step).astype(float)
+
+    # Apply valid mask
+    optimal_disc = np.where(valid, best_step, np.nan)
+    should_reprice = np.where(valid, should_reprice, np.nan)
+    optimal_profit = np.where(valid, best_profit, np.nan)
+
+    margin_df = pd.DataFrame({
+        "optimal_disc_margin": optimal_disc,
+        "should_reprice": should_reprice,
+        "optimal_profit": optimal_profit,
+    }, index=weekly.index)
     weekly = pd.concat([weekly, margin_df], axis=1)
 
     n_valid = margin_df["optimal_disc_margin"].notna().sum()

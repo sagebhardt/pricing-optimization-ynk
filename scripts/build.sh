@@ -39,7 +39,7 @@ build_api() {
             --project "$PROJECT" \
             --platform managed \
             --memory 512Mi --cpu 1 \
-            --min-instances 1 \
+            --min-instances 0 \
             --allow-unauthenticated \
             --set-env-vars "PYTHONPATH=/app,GCS_BUCKET=ynk-pricing-decisions,GOOGLE_CLIENT_ID=467343668842-b1imqgobg3l6v6670tnir2nsis5pv56v.apps.googleusercontent.com"
         echo "==> API deployed."
