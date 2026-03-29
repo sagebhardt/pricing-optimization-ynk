@@ -458,15 +458,35 @@ DEFAULT_LIFT = {
 }
 
 
-def compute_empirical_lift(weekly: pd.DataFrame, min_obs: int = 50) -> dict:
+def compute_empirical_lift(weekly: pd.DataFrame, min_obs: int = 50, brand: str = None) -> dict:
     """
     Derive discount→velocity lift multipliers from actual transaction data.
 
     Groups rows by discount bucket (snapped to DISCOUNT_STEPS), computes
     median velocity in each bucket, and normalizes relative to the 0% bucket.
     Falls back to DEFAULT_LIFT for buckets with too few observations.
+
+    When a cached lift table exists from a previous run (computed post-lifecycle
+    by build_enhanced_brand.py), uses that for lifecycle-filtered values.
     """
-    df = weekly[["discount_rate", "velocity_4w"]].dropna().copy()
+    cols = ["discount_rate", "velocity_4w"]
+
+    # Check for a lifecycle-filtered lift table from a previous pipeline run
+    if brand:
+        try:
+            import json
+            lift_path = _processed_dir(brand) / "empirical_lift.json"
+            if lift_path.exists():
+                cached = json.loads(lift_path.read_text())
+                # Validate it has all steps
+                if all(str(s) in cached for s in DISCOUNT_STEPS):
+                    lift = {float(k): v for k, v in cached.items()}
+                    print(f"  Lift table: loaded lifecycle-filtered cache from previous run")
+                    return lift
+        except Exception:
+            pass
+
+    df = weekly[cols].dropna().copy()
     if len(df) < min_obs * 3:
         return DEFAULT_LIFT.copy()
 
@@ -533,7 +553,7 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
         pass
 
     # Derive lift table from this brand's actual transaction data
-    lift_table = compute_empirical_lift(weekly)
+    lift_table = compute_empirical_lift(weekly, brand=brand)
     n_data = sum(1 for s in DISCOUNT_STEPS if lift_table[s] != DEFAULT_LIFT[s])
     print(f"  Lift table: {n_data}/9 steps derived from data, rest from defaults")
     print(f"    {lift_table}")

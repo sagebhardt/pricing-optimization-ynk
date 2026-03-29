@@ -128,6 +128,28 @@ def build_enhanced_for_brand(brand: str):
     except FileNotFoundError:
         print("  (not available)")
 
+    # Compute lifecycle-filtered empirical lift table for next run's margin targets
+    # This runs AFTER lifecycle data is available, avoiding the step-order issue.
+    print(f"[{brand}] Computing lifecycle-filtered empirical lift table...")
+    try:
+        from src.features.build_features_brand import compute_empirical_lift, DISCOUNT_STEPS, DEFAULT_LIFT
+        if "lifecycle_stage" in features.columns and "discount_rate" in features.columns:
+            clean = features[features["lifecycle_stage"].isin(["steady", "growth", "peak", "launch"])]
+            if len(clean) > 150:
+                lift = compute_empirical_lift(clean, min_obs=50)
+                import json
+                lift_path = processed / "empirical_lift.json"
+                lift_path.write_text(json.dumps({str(k): v for k, v in lift.items()}, indent=2))
+                n_data = sum(1 for s in DISCOUNT_STEPS if lift.get(s) != DEFAULT_LIFT.get(s))
+                print(f"  Saved lifecycle-filtered lift table ({n_data}/9 steps from data)")
+                print(f"    {lift}")
+            else:
+                print(f"  Not enough clean rows ({len(clean):,}) — skipping")
+        else:
+            print("  Lifecycle stage not available in features — skipping")
+    except Exception as e:
+        print(f"  Error computing lift table: {e}")
+
     # Save
     features.to_parquet(processed / "features_v2.parquet", index=False)
 
