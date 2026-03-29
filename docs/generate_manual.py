@@ -314,6 +314,7 @@ def build_manual():
         ("", "4.6 Cola del Planner"),
         ("", "4.7 Exportación"),
         ("", "4.8 Administración de Usuarios"),
+        ("", "4.9 Predicción vs Realidad (Feedback Loop)"),
         ("5.", "Rendimiento Actual por Marca"),
         ("6.", "Elasticidades: Qué Significan para el Negocio"),
         ("", "6.1-6.6 Resultados por marca e implicaciones estratégicas"),
@@ -760,6 +761,55 @@ def build_manual():
     story.append(p(
         "Cualquier usuario con email @yaneken.cl o @ynk.cl puede ingresar al dashboard como viewer "
         "(solo lectura). Los roles de mayor permiso deben asignarse explícitamente."
+    ))
+
+    # 4.9 Feedback loop
+    story.append(h2("4.9 Predicción vs Realidad (Feedback Loop)"))
+    story.append(p(
+        "El panel de analítica incluye una sección de <b>Predicción vs Realidad</b> que compara "
+        "lo que el modelo predijo con lo que realmente ocurrió después de implementar un cambio de precio. "
+        "Esta es la validación más importante del sistema."
+    ))
+    story.append(sp(4))
+    story.append(h3("Cómo funciona"))
+    story.append(p(
+        "Cada semana, el pipeline compara las decisiones aprobadas de las últimas 1-4 semanas "
+        "con las ventas reales registradas en ese período. Para cada SKU-tienda donde se implementó "
+        "un cambio de precio, calcula:"
+    ))
+    story.append(bullet("<b>Velocidad predicha vs real:</b> cuántas unidades/semana predijo el modelo vs cuántas se vendieron realmente."))
+    story.append(bullet("<b>Revenue predicho vs real:</b> ingresos esperados vs ingresos reales."))
+    story.append(bullet("<b>Lift vs baseline:</b> cuánto mejoró la venta respecto al estado anterior (antes del cambio de precio)."))
+    story.append(sp(4))
+    story.append(h3("Métricas clave"))
+    story.append(make_table([
+        ['Métrica', 'Qué mide', 'Cómo interpretar'],
+        ['Tasa de captura\nde lift', 'Qué fracción del lift predicho\nse materializó realmente', 'Verde ≥ 70%: el modelo es confiable.\n'
+         'Ámbar 50-70%: sesgo optimista moderado.\nRojo < 50%: modelo sobre-estima el efecto.'],
+        ['Precisión\ndireccional', 'En qué % de casos la velocidad\nse movió en la dirección predicha', '> 75%: el modelo acierta la dirección.\n'
+         '< 60%: señal de alerta, revisar elasticidades.'],
+        ['Error mediano\nde velocidad', 'Diferencia mediana entre velocidad\npredicha y real (en %)', 'Negativo = modelo sobre-estima demanda.\n'
+         'Positivo = modelo sub-estima demanda.'],
+    ], col_widths=[1.2*inch, 2.2*inch, 3.1*inch]))
+    story.append(sp(4))
+    story.append(h3("Peores predicciones"))
+    story.append(p(
+        "El panel muestra las 5 predicciones con mayor error. Esto permite identificar <b>patrones</b>: "
+        "si los errores se concentran en una categoría, tienda o nivel de confianza específico, "
+        "indica dónde el modelo necesita mejoras o dónde el criterio humano debería tener más peso."
+    ))
+    story.append(sp(4))
+    story.append(callout_box(
+        "Por qué es importante",
+        "Sin esta validación, no sabemos si las recomendaciones realmente mejoran el negocio. "
+        "La tasa de captura de lift es el número más importante del sistema — si consistentemente "
+        "es < 50%, las elasticidades están sobre-estimadas y el modelo necesita recalibración. "
+        "Si es > 70%, las recomendaciones están generando el valor esperado."
+    ))
+    story.append(sp(4))
+    story.append(note(
+        "Los datos de predicción vs realidad se acumulan semana a semana. Las primeras semanas "
+        "tendrán pocos datos; la sección se vuelve más confiable después de 4-8 semanas de uso activo."
     ))
 
     # ════════════════════════════════════════════════════════════════════════
