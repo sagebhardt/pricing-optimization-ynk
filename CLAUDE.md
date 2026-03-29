@@ -99,7 +99,7 @@ API (Cloud Run, slim image ~50MB):
   - Default (soft rollout): legacy `approved`/`manual` export directly, new `bm_*` statuses need planner
 
 ## Persistence & Storage (GCS)
-- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/` (incl. SHAP CSVs, elasticity parquets)
+- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/` (incl. SHAP CSVs, elasticity parquets), `outcomes/{brand}/`
 - Supplemental data: `data/raw/{brand}/costs.parquet`, `official_prices.parquet`
 - Decisions: `decisions/{brand}/decisions_{week}.json`
 - Audit log: `audit/{brand}/{YYYY-MM}.jsonl`
@@ -126,7 +126,7 @@ DB (PostgreSQL) → extract → parquet (local)
 
 ## Step Order (Important)
 ```
-extract → elasticity → features → lifecycle → size_curve → enhance → aggregate → train → pricing → sync
+extract → elasticity → features → lifecycle → size_curve → enhance → aggregate → train → pricing → outcome → sync
 ```
 Elasticity MUST run before features because `add_margin_targets` reads elasticity data from disk to estimate velocity at different discount levels. On fresh containers, running features first produces low-variance targets (everything clusters at 30-35% discount).
 
@@ -210,7 +210,8 @@ Multi-brand banners (BOLD, BAMERS, BELSPORT) carry products from multiple vendor
 
 ## API Endpoints
 Key endpoints (all auth-protected except /health):
-- `GET /analytics/{brand}` — model health, elasticity, lifecycle, impact data
+- `GET /analytics/{brand}` — model health, elasticity, lifecycle, impact, prediction vs actual data
+- `GET /analytics/outcomes/{brand}` — per-decision prediction vs actual drill-down
 - `POST /estimate-impact` — recalculate velocity/revenue/margin for manual price
 - `POST /decisions` — save decision (approve/reject/manual, optional chain_scope)
 - `POST /decisions/plan` — planner approves/rejects BM decisions
@@ -219,7 +220,7 @@ Key endpoints (all auth-protected except /health):
 
 ## Testing
 ```bash
-python3 -m pytest tests/ -v           # 107 tests, <1s
+python3 -m pytest tests/ -v           # 137 tests, <1s
 python3 -m pytest tests/ --cov=api    # with coverage
 ```
 Test coverage: pricing_math (97%), vendor_brands (100%), API endpoints, pipeline lift table, role permissions.

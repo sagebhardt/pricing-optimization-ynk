@@ -714,15 +714,18 @@ def build_manual():
     story.append(bullet("<b>Sólo B&M:</b> aprueba solo en tiendas físicas"))
 
     # 4.5 Analytics
-    story.append(h2("4.5 Panel de Analitica"))
+    story.append(h2("4.5 Panel de Analítica"))
     story.append(p(
-        "El botón \"Análisis\" abre un panel lateral con cuatro secciones:"
+        "El botón \"Análisis\" abre un panel lateral con cinco secciones:"
     ))
     story.append(sp(4))
     story.append(bullet("<b>Modelo:</b> métricas de rendimiento del clasificador y regresor (AUC, R\u00b2, features más importantes)."))
     story.append(bullet("<b>Elasticidad:</b> distribución de elasticidades por vendor o subcategoría, SKUs elásticos vs. inelásticos."))
     story.append(bullet("<b>Ciclo de vida:</b> distribución de productos por etapa y urgencia."))
     story.append(bullet("<b>Impacto:</b> resumen del revenue y margen delta por tienda y por marca/categoría."))
+    story.append(bullet("<b>Predicción vs Realidad:</b> compara las predicciones del modelo con las ventas reales "
+                        "después de implementar un cambio de precio. Muestra tasa de captura de lift, precisión "
+                        "direccional, y las peores predicciones para identificar dónde mejorar."))
 
     # 4.6 Planner queue
     story.append(h2("4.6 Cola del Planner (Flujo de Dos Pasos)"))
