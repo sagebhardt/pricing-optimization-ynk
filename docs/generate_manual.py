@@ -458,7 +458,7 @@ def build_manual():
     story.append(h2("2.3 El Regresor: A que descuento?"))
     story.append(p(
         "Para los productos que el clasificador marca como candidatos a repricing, el regresor "
-        "(también XGBoost) predice el <b>descuento óptimo que maximiza el margen bruto semanal</b>."
+        "(LightGBM, un modelo de gradient boosting optimizado) predice el <b>descuento óptimo que maximiza el margen bruto semanal</b>."
     ))
     story.append(sp(4))
     story.append(h3("Cómo calcula el descuento óptimo?"))
