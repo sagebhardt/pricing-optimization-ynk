@@ -136,14 +136,18 @@ def sp(h=6):
 def hr():
     return HRFlowable(width="100%", thickness=0.5, color=BORDER, spaceAfter=8, spaceBefore=8)
 
+_cell_style = ParagraphStyle('CellBody', fontName='Helvetica', fontSize=9, leading=12, textColor=DARK)
+_cell_header_style = ParagraphStyle('CellHeader', fontName='Helvetica-Bold', fontSize=9, leading=12, textColor=white)
+
 def make_table(data, col_widths=None, has_header=True):
-    """Create a styled table."""
-    t = Table(data, colWidths=col_widths, repeatRows=1 if has_header else 0)
+    """Create a styled table. Wraps all string cells in Paragraphs for proper text wrapping."""
+    # Convert plain strings to Paragraphs so text wraps within cells
+    wrapped = []
+    for i, row in enumerate(data):
+        style = _cell_header_style if (i == 0 and has_header) else _cell_style
+        wrapped.append([Paragraph(str(cell).replace('\n', '<br/>'), style) if isinstance(cell, str) else cell for cell in row])
+    t = Table(wrapped, colWidths=col_widths, repeatRows=1 if has_header else 0)
     style_cmds = [
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('LEADING', (0, 0), (-1, -1), 13),
-        ('TEXTCOLOR', (0, 0), (-1, -1), DARK),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('LEFTPADDING', (0, 0), (-1, -1), 8),
         ('RIGHTPADDING', (0, 0), (-1, -1), 8),
@@ -154,9 +158,6 @@ def make_table(data, col_widths=None, has_header=True):
     if has_header:
         style_cmds += [
             ('BACKGROUND', (0, 0), (-1, 0), TABLE_HEADER),
-            ('TEXTCOLOR', (0, 0), (-1, 0), white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
         ]
     # Alternate row colors
     for i in range(1, len(data)):
