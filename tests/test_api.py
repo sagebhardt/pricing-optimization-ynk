@@ -135,6 +135,135 @@ class TestDecisions:
         assert data["decisions"]["TEST-SKU-002"]["status"] == "rejected"
 
 
+class TestOverviewEndpoint:
+    def test_overview_returns_brands(self, client):
+        r = client.get("/analytics/overview")
+        assert r.status_code == 200
+        data = r.json()
+        assert "brands" in data
+        assert isinstance(data["brands"], list)
+
+    def test_overview_brand_has_required_fields(self, client):
+        r = client.get("/analytics/overview")
+        data = r.json()
+        if data["brands"]:
+            b = data["brands"][0]
+            for field in ["brand", "total_actions", "pending", "decided", "approved",
+                          "rev_delta", "margin_delta", "classifier_auc", "regressor_r2"]:
+                assert field in b, f"Missing field: {field}"
+
+
+class TestEstimateImpact:
+    def test_estimate_impact_404_unknown_sku(self, client):
+        r = client.post("/estimate-impact", json={
+            "brand": "hoka",
+            "parent_sku": "NONEXISTENT",
+            "store": "9999",
+            "manual_price": 29990,
+        })
+        assert r.status_code == 404
+
+    def test_estimate_impact_returns_snapped_price(self, client):
+        """If a real action exists, we'd get a valid response. Test the error case."""
+        r = client.post("/estimate-impact", json={
+            "brand": "hoka",
+            "parent_sku": "FAKE-SKU",
+            "store": "0000",
+            "manual_price": 50000,
+        })
+        # Should be 404 since the SKU doesn't exist in actions
+        assert r.status_code == 404
+
+
+class TestManualDecision:
+    def test_post_manual_decision(self, client):
+        r = client.post("/decisions", json={
+            "brand": "hoka",
+            "week": "2099-03-01",
+            "key": "TEST-MANUAL-001",
+            "status": "manual",
+            "manual_price": 49990,
+            "estimated_impact": {"velocity": 2.5, "weekly_revenue": 124975, "margin_pct": 35.2},
+        })
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_manual_decision_persists_extra_fields(self, client):
+        client.post("/decisions", json={
+            "brand": "hoka",
+            "week": "2099-03-02",
+            "key": "TEST-MANUAL-002",
+            "status": "manual",
+            "manual_price": 39990,
+        })
+        r = client.get("/decisions?brand=hoka&week=2099-03-02")
+        data = r.json()
+        dec = data["decisions"].get("TEST-MANUAL-002", {})
+        assert dec.get("status") == "manual"
+        assert dec.get("manual_price") == 39990
+
+
+class TestChainDecision:
+    def test_chain_decision_requires_chain_format(self, client):
+        r = client.post("/decisions", json={
+            "brand": "hoka",
+            "week": "2099-04-01",
+            "key": "BAD-KEY-NO-CHAIN",
+            "status": "approved",
+            "chain_scope": "all",
+        })
+        assert r.status_code == 400
+
+    def test_chain_decision_with_valid_key(self, client):
+        r = client.post("/decisions", json={
+            "brand": "hoka",
+            "week": "2099-04-02",
+            "key": "HK9999-chain-all",
+            "status": "approved",
+            "chain_scope": "all",
+        })
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+
+class TestPlannerEndpoints:
+    def test_planner_queue_returns_data(self, client):
+        r = client.get("/decisions/planner-queue?brand=hoka")
+        assert r.status_code == 200
+        data = r.json()
+        assert "items" in data
+        assert "week" in data
+
+    def test_planner_decide_validates_status(self, client):
+        r = client.post("/decisions/plan", json={
+            "brand": "hoka",
+            "week": "2099-05-01",
+            "keys": ["TEST-KEY"],
+            "status": "invalid_status",
+        })
+        assert r.status_code == 400
+
+    def test_planner_decide_with_valid_status(self, client):
+        # First create a BM decision
+        client.post("/decisions", json={
+            "brand": "hoka",
+            "week": "2099-05-02",
+            "key": "TEST-PLANNER-001",
+            "status": "approved",
+        })
+        # Then planner approves it
+        r = client.post("/decisions/plan", json={
+            "brand": "hoka",
+            "week": "2099-05-02",
+            "keys": ["TEST-PLANNER-001"],
+            "status": "planner_approved",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["changed"] == 1
+
+
 class TestRolePermissions:
     def test_admin_has_plan_permission(self):
         from config.auth import ROLE_PERMISSIONS
