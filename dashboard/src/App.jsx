@@ -4,6 +4,7 @@ import AnalyticsDrawer from './AnalyticsDrawer'
 import StoreSidebar from './StoreSidebar'
 import ManualPriceModal from './ManualPriceModal'
 import ChainViewModal from './ChainViewModal'
+import PlannerQueue from './PlannerQueue'
 import './App.css'
 
 const BRANDS = [
@@ -406,7 +407,7 @@ function AdminPanel({ authFetch, onClose }) {
     authFetch('/admin/users', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, role, brands: role === 'brand_manager' ? brands : null, name }),
+      body: JSON.stringify({ email, role, brands: ['brand_manager', 'planner'].includes(role) ? brands : null, name }),
     }).then(() => {
       setEmail(''); setName(''); setRole('viewer'); setBrands([])
       load()
@@ -468,9 +469,10 @@ function AdminPanel({ authFetch, onClose }) {
               <select value={role} onChange={e => setRole(e.target.value)}>
                 <option value="admin">Admin</option>
                 <option value="brand_manager">Brand Manager</option>
+                <option value="planner">Planner</option>
                 <option value="viewer">Viewer</option>
               </select>
-              {role === 'brand_manager' && (
+              {['brand_manager', 'planner'].includes(role) && (
                 <div className="admin-brands">
                   {ALL_BRANDS.map(b => (
                     <label key={b} className="admin-brand-check">
@@ -539,8 +541,10 @@ function App() {
 
   // Permissions
   const canApprove = user?.permissions?.includes('approve')
+  const canPlan = user?.permissions?.includes('plan')
   const canExport = user?.permissions?.includes('export')
   const canAudit = user?.permissions?.includes('audit')
+  const [showPlannerQueue, setShowPlannerQueue] = useState(false)
 
   // Brands visible to this user
   const visibleBrands = useMemo(() => {
@@ -583,7 +587,7 @@ function App() {
         setAuthConfig(cfg)
         if (!cfg.required) {
           setUser({ email: 'dev@local', name: 'Developer', picture: '', role: 'admin',
-                    permissions: ['approve', 'audit', 'export', 'manage', 'read'], brands: null })
+                    permissions: ['approve', 'audit', 'export', 'manage', 'plan', 'read'], brands: null })
         } else {
           const saved = sessionStorage.getItem('ynk_token')
           if (saved) fetchUser(saved)
@@ -937,6 +941,12 @@ function App() {
               </button>
             ))}
           </nav>
+          {canPlan && (
+            <button className={`brand-tab brand-tab--planner ${showPlannerQueue ? 'brand-tab--active' : ''}`}
+                    onClick={() => setShowPlannerQueue(!showPlannerQueue)}>
+              Cola Planner
+            </button>
+          )}
         </div>
         <div className="header-meta">
           {info && <span className="meta-tag">v{info.version} AUC {info.classifier?.avg_auc?.toFixed(3)}</span>}
@@ -957,12 +967,15 @@ function App() {
         </div>
       </header>
 
-      {week && (
+      {week && showPlannerQueue && (
+        <PlannerQueue brand={brand?.id} authFetch={authFetch} showToast={showToast} />
+      )}
+
+      {week && !showPlannerQueue && (<>
         <div className="freshness-banner">
           Datos: Semana del {week}
           {undecidedCount > 0 && <span className="freshness-pending"> — {undecidedCount} acciones sin revisar</span>}
         </div>
-      )}
 
       <div className="stats-row">
         <div className="kpi">
@@ -1179,6 +1192,7 @@ function App() {
 
       </div>{/* main-content */}
       </div>{/* dashboard-body */}
+      </>)}{/* end week && !showPlannerQueue */}
 
       {chainSku && (
         <ChainViewModal

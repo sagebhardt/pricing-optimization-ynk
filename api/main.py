@@ -572,6 +572,97 @@ def bulk_decisions(payload: BulkDecisionPayload, request: Request):
     return {"ok": True, "total": len(data["decisions"])}
 
 
+# ── Planner Approval (two-step workflow) ──────────────────────────────────────
+
+class PlannerDecisionPayload(BaseModel):
+    brand: str
+    week: str
+    keys: list[str]
+    status: str  # "planner_approved" or "planner_rejected"
+
+
+@app.post("/decisions/plan")
+def planner_decide(payload: PlannerDecisionPayload, request: Request):
+    """Planner approves or rejects BM-proposed decisions."""
+    from api import storage
+    user = _get_user(request)
+    if "plan" not in user.get("permissions", []):
+        raise HTTPException(403, "Permission 'plan' required")
+    _check_brand_access(user, payload.brand)
+
+    if payload.status not in ("planner_approved", "planner_rejected"):
+        raise HTTPException(400, "Status must be 'planner_approved' or 'planner_rejected'")
+
+    data = storage.load_decisions(payload.brand, payload.week)
+    data["week"] = payload.week
+    data["brand"] = payload.brand.lower()
+
+    bm_statuses = {"bm_approved", "bm_rejected", "bm_manual", "approved", "rejected", "manual"}
+    changed = 0
+    for key in payload.keys:
+        rec = data["decisions"].get(key, {})
+        current_status = rec.get("status", "")
+        if current_status not in bm_statuses:
+            continue  # skip items not yet BM-decided
+        rec["bm_status"] = current_status  # preserve original BM decision
+        rec["planner_status"] = payload.status
+        rec["planner_user"] = user["email"]
+        rec["planner_timestamp"] = datetime.now().isoformat()
+        rec["status"] = payload.status
+        data["decisions"][key] = rec
+        changed += 1
+
+    storage.save_decisions(data)
+    if changed:
+        storage.append_audit({
+            "brand": payload.brand.lower(),
+            "user_email": user["email"],
+            "user_name": user["name"],
+            "action": f"planner_{payload.status}",
+            "count": changed,
+            "week": payload.week,
+        })
+    return {"ok": True, "changed": changed, "total": len(data["decisions"])}
+
+
+@app.get("/decisions/planner-queue")
+def planner_queue(request: Request, brand: str = Query(...)):
+    """Get items awaiting planner approval for a brand."""
+    from api import storage
+    user = _get_user(request)
+    if "plan" not in user.get("permissions", []):
+        raise HTTPException(403, "Permission 'plan' required")
+    _check_brand_access(user, brand)
+
+    ad = storage.load_pricing_actions(brand)
+    items = ad.get("items", [])
+    week = ad.get("week")
+
+    dec_data = storage.load_decisions(brand, week)
+    dec_map = dec_data.get("decisions", {})
+
+    # Items that BMs have decided but planners haven't reviewed
+    bm_decided_statuses = {"bm_approved", "bm_rejected", "bm_manual", "approved", "rejected", "manual"}
+    planner_done_statuses = {"planner_approved", "planner_rejected"}
+
+    queue = []
+    for item in items:
+        key = f"{item.get('parent_sku')}-{item.get('store')}"
+        dec = dec_map.get(key, {})
+        status = dec.get("status", "")
+        if status in bm_decided_statuses and status not in planner_done_statuses:
+            queue.append({
+                **item,
+                "decision_key": key,
+                "bm_status": status,
+                "bm_user": dec.get("user", ""),
+                "bm_timestamp": dec.get("timestamp", ""),
+                "manual_price": dec.get("manual_price"),
+            })
+
+    return {"brand": brand, "week": week, "total": len(queue), "items": queue}
+
+
 # ── Audit log ─────────────────────────────────────────────────────────────────
 
 @app.get("/audit")
@@ -657,7 +748,14 @@ def export_price_changes(
     dec_map = dec_data.get("decisions", {})
 
     df["_key"] = df["parent_sku"].astype(str) + "-" + df["store"].astype(str)
-    exportable_statuses = {"approved", "manual", "planner_approved"}
+    # When planner approval is required, only planner_approved items export.
+    # Legacy "approved"/"manual" are included for backward compat during rollout.
+    require_planner = os.getenv("REQUIRE_PLANNER_APPROVAL", "").lower() in ("true", "1")
+    if require_planner:
+        exportable_statuses = {"planner_approved"}
+    else:
+        # Legacy "approved"/"manual" from old clients pass through; new bm_* statuses require planner
+        exportable_statuses = {"approved", "manual", "planner_approved"}
     approved = df[df["_key"].apply(
         lambda k: dec_map.get(k, {}).get("status", "") in exportable_statuses
     )].copy()
