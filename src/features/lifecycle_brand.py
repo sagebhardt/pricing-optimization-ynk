@@ -102,14 +102,20 @@ def assign_lifecycle_stage(parent_weekly):
             all_groups.append(g)
             continue
 
-        # Fill week gaps with zeros
-        all_weeks = pd.date_range(g["week"].min(), g["week"].max(), freq="W-MON")
-        g = g.set_index("week").reindex(all_weeks).rename_axis("week").reset_index()
-        g["codigo_padre"] = parent
-        g["centro"] = store
-        g[["units", "revenue", "avg_discount_rate"]] = (
-            g[["units", "revenue", "avg_discount_rate"]].fillna(0)
-        )
+        # Fill week gaps with zeros — but only if the group is dense enough.
+        # Sparse groups (e.g. 5 sales weeks over 52-week span) create massive
+        # zero-filled DataFrames for little benefit. Skip gap-filling if too sparse.
+        # Also require >= 8 observed weeks so rolling(8) windows are meaningful.
+        week_span = (g["week"].max() - g["week"].min()).days // 7 + 1
+        density = len(g) / max(week_span, 1)
+        if density >= 0.2 and len(g) >= 8:
+            all_weeks = pd.date_range(g["week"].min(), g["week"].max(), freq="W-MON")
+            g = g.set_index("week").reindex(all_weeks).rename_axis("week").reset_index()
+            g["codigo_padre"] = parent
+            g["centro"] = store
+            g[["units", "revenue", "avg_discount_rate"]] = (
+                g[["units", "revenue", "avg_discount_rate"]].fillna(0)
+            )
 
         n = len(g)
 

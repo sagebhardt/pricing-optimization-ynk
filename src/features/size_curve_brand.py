@@ -70,42 +70,20 @@ def build_size_availability_from_stock(stock, products):
     del footwear  # free memory
 
     in_stock = eow[eow["in_stock"] == 1]
+    in_stock_core = in_stock[in_stock["talla"].isin(CORE_SIZES)]
 
-    # ── Step 1: Active sizes per parent-store-week ──
-    active_counts = (
-        in_stock.groupby(["codigo_padre", "centro", "week"])["talla"]
-        .nunique().rename("active_sizes_4w").reset_index()
-    )
+    # ── Steps 1-4 combined: two groupbys instead of four, then one merge ──
+    # Weekly: active sizes + core sizes active
+    active_counts = in_stock.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("active_sizes_4w")
+    core_active = in_stock_core.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("core_sizes_active") if len(in_stock_core) > 0 else pd.Series(dtype=int, name="core_sizes_active")
+    weekly_agg = pd.concat([active_counts, core_active], axis=1).fillna(0).astype(int).reset_index()
 
-    # ── Step 2: Core sizes active per parent-store-week ──
-    core_in_stock = in_stock[in_stock["talla"].isin(CORE_SIZES)]
-    if len(core_in_stock) > 0:
-        core_counts = (
-            core_in_stock.groupby(["codigo_padre", "centro", "week"])["talla"]
-            .nunique().rename("core_sizes_active").reset_index()
-        )
-    else:
-        core_counts = pd.DataFrame(columns=["codigo_padre", "centro", "week", "core_sizes_active"])
+    # Ever: total sizes + core sizes per parent-store
+    total_ever = in_stock.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("total_sizes_ever")
+    core_ever = in_stock_core.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("core_sizes_total") if len(in_stock_core) > 0 else pd.Series(dtype=int, name="core_sizes_total")
+    ever_agg = pd.concat([total_ever, core_ever], axis=1).fillna(0).astype(int).reset_index()
 
-    # ── Step 3: Total sizes ever per parent-store ──
-    total_ever = (
-        in_stock.groupby(["codigo_padre", "centro"])["talla"]
-        .nunique().rename("total_sizes_ever").reset_index()
-    )
-
-    # Core sizes ever per parent-store
-    if len(core_in_stock) > 0:
-        core_ever = (
-            core_in_stock.groupby(["codigo_padre", "centro"])["talla"]
-            .nunique().rename("core_sizes_total").reset_index()
-        )
-    else:
-        core_ever = pd.DataFrame(columns=["codigo_padre", "centro", "core_sizes_total"])
-
-    # ── Step 4: Assemble result ──
-    result = active_counts.merge(total_ever, on=["codigo_padre", "centro"], how="left")
-    result = result.merge(core_counts, on=["codigo_padre", "centro", "week"], how="left")
-    result = result.merge(core_ever, on=["codigo_padre", "centro"], how="left")
+    result = weekly_agg.merge(ever_agg, on=["codigo_padre", "centro"], how="left")
 
     result["core_sizes_active"] = result["core_sizes_active"].fillna(0).astype(int)
     result["core_sizes_total"] = result["core_sizes_total"].fillna(0).astype(int)
@@ -195,40 +173,19 @@ def build_size_availability(txn, products):
     expanded = pd.concat(expanded_frames).drop_duplicates()
     print(f"    {len(expanded):,} expanded active-size records")
 
-    # ── Step 3: Active sizes per parent-store-week ──
-    active_counts = (
-        expanded.groupby(["codigo_padre", "centro", "week"])["talla"]
-        .nunique().rename("active_sizes_4w").reset_index()
-    )
-
-    # ── Step 4: Core sizes active per parent-store-week ──
+    # ── Steps 3-6 combined: fewer groupbys, fewer merges ──
     core_expanded = expanded[expanded["talla"].isin(CORE_SIZES)]
-    if len(core_expanded) > 0:
-        core_counts = (
-            core_expanded.groupby(["codigo_padre", "centro", "week"])["talla"]
-            .nunique().rename("core_sizes_active").reset_index()
-        )
-    else:
-        core_counts = pd.DataFrame(columns=["codigo_padre", "centro", "week", "core_sizes_active"])
 
-    # ── Step 5: Total sizes ever and core sizes ever per parent-store ──
-    total_ever = (
-        size_sales.groupby(["codigo_padre", "centro"])["talla"]
-        .nunique().rename("total_sizes_ever").reset_index()
-    )
+    active_counts = expanded.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("active_sizes_4w")
+    core_active = core_expanded.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("core_sizes_active") if len(core_expanded) > 0 else pd.Series(dtype=int, name="core_sizes_active")
+    weekly_agg = pd.concat([active_counts, core_active], axis=1).fillna(0).astype(int).reset_index()
+
+    total_ever = size_sales.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("total_sizes_ever")
     core_sales = size_sales[size_sales["talla"].isin(CORE_SIZES)]
-    if len(core_sales) > 0:
-        core_ever = (
-            core_sales.groupby(["codigo_padre", "centro"])["talla"]
-            .nunique().rename("core_sizes_total").reset_index()
-        )
-    else:
-        core_ever = pd.DataFrame(columns=["codigo_padre", "centro", "core_sizes_total"])
+    core_ever = core_sales.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("core_sizes_total") if len(core_sales) > 0 else pd.Series(dtype=int, name="core_sizes_total")
+    ever_agg = pd.concat([total_ever, core_ever], axis=1).fillna(0).astype(int).reset_index()
 
-    # ── Step 6: Assemble result ──
-    result = active_counts.merge(total_ever, on=["codigo_padre", "centro"], how="left")
-    result = result.merge(core_counts, on=["codigo_padre", "centro", "week"], how="left")
-    result = result.merge(core_ever, on=["codigo_padre", "centro"], how="left")
+    result = weekly_agg.merge(ever_agg, on=["codigo_padre", "centro"], how="left")
 
     result["core_sizes_active"] = result["core_sizes_active"].fillna(0).astype(int)
     result["core_sizes_total"] = result["core_sizes_total"].fillna(0).astype(int)

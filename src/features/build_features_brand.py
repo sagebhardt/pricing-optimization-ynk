@@ -452,10 +452,54 @@ def filter_active_rows(weekly: pd.DataFrame) -> pd.DataFrame:
 
 
 DISCOUNT_STEPS = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
-EMPIRICAL_LIFT = {
+DEFAULT_LIFT = {
     0.0: 1.0, 0.05: 1.3, 0.10: 1.5, 0.15: 1.8, 0.20: 2.2,
     0.25: 2.6, 0.30: 3.0, 0.35: 3.5, 0.40: 4.0,
 }
+
+
+def compute_empirical_lift(weekly: pd.DataFrame, min_obs: int = 50) -> dict:
+    """
+    Derive discount→velocity lift multipliers from actual transaction data.
+
+    Groups rows by discount bucket (snapped to DISCOUNT_STEPS), computes
+    median velocity in each bucket, and normalizes relative to the 0% bucket.
+    Falls back to DEFAULT_LIFT for buckets with too few observations.
+    """
+    df = weekly[["discount_rate", "velocity_4w"]].dropna().copy()
+    if len(df) < min_obs * 3:
+        return DEFAULT_LIFT.copy()
+
+    # Snap to nearest step
+    steps_arr = np.array(DISCOUNT_STEPS)
+    df["bucket"] = steps_arr[np.abs(df["discount_rate"].values[:, None] - steps_arr[None, :]).argmin(axis=1)]
+
+    bucket_vel = df.groupby("bucket")["velocity_4w"].median()
+    # Only use empirical data if we have enough 0%-discount observations for a reliable baseline.
+    # Without it, all lift ratios become relative to an arbitrary discount level.
+    n_zero = (df["bucket"] == 0.0).sum()
+    base_vel = bucket_vel.get(0.0, None)
+    if base_vel is None or base_vel <= 0 or n_zero < min_obs:
+        return DEFAULT_LIFT.copy()
+
+    lift = {}
+    for step in DISCOUNT_STEPS:
+        if step in bucket_vel.index and bucket_vel[step] > 0:
+            n = (df["bucket"] == step).sum()
+            if n >= min_obs:
+                lift[step] = round(bucket_vel[step] / base_vel, 2)
+            else:
+                lift[step] = DEFAULT_LIFT[step]
+        else:
+            lift[step] = DEFAULT_LIFT[step]
+
+    # Sanity: lift must be monotonically non-decreasing
+    prev = 1.0
+    for step in DISCOUNT_STEPS:
+        lift[step] = max(lift[step], prev)
+        prev = lift[step]
+
+    return lift
 
 
 def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
@@ -487,6 +531,12 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
         elast_map = elast_df[elast_df["confidence"].isin(["high", "medium"])].set_index("codigo_padre")["elasticity"].to_dict()
     except FileNotFoundError:
         pass
+
+    # Derive lift table from this brand's actual transaction data
+    lift_table = compute_empirical_lift(weekly)
+    n_data = sum(1 for s in DISCOUNT_STEPS if lift_table[s] != DEFAULT_LIFT[s])
+    print(f"  Lift table: {n_data}/9 steps derived from data, rest from defaults")
+    print(f"    {lift_table}")
 
     def _get_cost(sku):
         if sku in cost_map:
@@ -533,10 +583,10 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
     vol_change = -price_change_pct * elast[:, None]  # (N, 9)
     vel_elast = np.maximum(actual_vel[:, None] * (1 + vol_change), 0.1)  # (N, 9)
 
-    # Empirical lift table velocity (fallback)
+    # Data-derived lift table velocity (fallback when no elasticity)
     snap_steps = np.array([_snap_disc(d) for d in actual_disc])  # (N,)
-    base_lift = np.array([EMPIRICAL_LIFT.get(s, 1.0) for s in snap_steps])  # (N,)
-    target_lift = np.array([EMPIRICAL_LIFT.get(s, 1 + s * 5) for s in steps])  # (9,)
+    base_lift = np.array([lift_table.get(s, 1.0) for s in snap_steps])  # (N,)
+    target_lift = np.array([lift_table.get(s, 1 + s * 5) for s in steps])  # (9,)
     vel_lift = np.maximum(actual_vel[:, None] * target_lift[None, :] / np.maximum(base_lift[:, None], 0.1), 0.1)  # (N, 9)
 
     # Select: elasticity where available, lift table otherwise
