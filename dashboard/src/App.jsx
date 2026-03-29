@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2 } from 'lucide-react'
+import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2, Store, Tag } from 'lucide-react'
 import AnalyticsDrawer from './AnalyticsDrawer'
+import StoreSidebar from './StoreSidebar'
 import './App.css'
 
 const BRANDS = [
@@ -508,11 +509,16 @@ function App() {
   const [showAdmin, setShowAdmin] = useState(false)
   const [showExportConfirm, setShowExportConfirm] = useState(false)
   const [showAnalytics, setShowAnalytics] = useState(false)
+  const [viewMode, setViewMode] = useState('list')  // 'list' | 'tiendas' | 'marcas'
+  const [filterVendor, setFilterVendor] = useState(null)
   const [toast, setToast] = useState(null)
   const [filterStatus, setFilterStatus] = useState('all')  // all | pending | approved | rejected
   const [sortBy, setSortBy] = useState('urgency')           // urgency | revenue | confidence | store
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 50
+
+  const MULTI_VENDOR_BRANDS = ['bold', 'bamers', 'belsport']
+  const isMultiVendor = brand && MULTI_VENDOR_BRANDS.includes(brand.id)
 
   // Permissions
   const canApprove = user?.permissions?.includes('approve')
@@ -601,6 +607,8 @@ function App() {
     setFilterCategory('all')
     setFilterStatus('all')
     setShowAnalytics(false)
+    setViewMode('list')
+    setFilterVendor(null)
     setSortBy('urgency')
     setPage(1)
     setBrand(b)
@@ -647,10 +655,47 @@ function App() {
     [actions]
   )
 
+  // Store roster for sidebar navigation
+  const storeRoster = useMemo(() => {
+    const map = {}
+    actions.forEach(a => {
+      const name = a.store_name || a.store
+      if (!name) return
+      if (!map[name]) map[name] = { key: a.store, name, total: 0, pending: 0, decided: 0, highCount: 0, medCount: 0, revDelta: 0 }
+      const s = map[name]
+      s.total++
+      const dec = decisions[`${a.parent_sku}-${a.store}`]
+      if (dec) { s.decided++ } else { s.pending++ }
+      if (a.urgency === 'HIGH') s.highCount++
+      if (a.urgency === 'MEDIUM') s.medCount++
+      s.revDelta += Number(a.rev_delta) || 0
+    })
+    return Object.values(map).sort((a, b) => b.pending - a.pending || b.total - a.total)
+  }, [actions, decisions])
+
+  // Vendor brand roster for sidebar navigation (multi-brand only)
+  const vendorRoster = useMemo(() => {
+    if (!isMultiVendor) return []
+    const map = {}
+    actions.forEach(a => {
+      const vb = a.vendor_brand || 'Other'
+      if (!map[vb]) map[vb] = { key: vb, name: vb, total: 0, pending: 0, decided: 0, highCount: 0, medCount: 0, revDelta: 0 }
+      const s = map[vb]
+      s.total++
+      const dec = decisions[`${a.parent_sku}-${a.store}`]
+      if (dec) { s.decided++ } else { s.pending++ }
+      if (a.urgency === 'HIGH') s.highCount++
+      if (a.urgency === 'MEDIUM') s.medCount++
+      s.revDelta += Number(a.rev_delta) || 0
+    })
+    return Object.values(map).sort((a, b) => b.pending - a.pending || b.total - a.total)
+  }, [actions, decisions, isMultiVendor])
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     let result = actions.filter(a => {
       if (filterStore !== 'all' && (a.store_name || a.store) !== filterStore) return false
+      if (filterVendor && (a.vendor_brand || 'Other') !== filterVendor) return false
       if (filterUrgency !== 'all') {
         if (filterUrgency === 'INCREASE' && a.action_type !== 'increase') return false
         if (filterUrgency !== 'INCREASE' && (a.urgency !== filterUrgency || a.action_type === 'increase')) return false
@@ -680,7 +725,7 @@ function App() {
       result.sort((a, b) => (a.store_name || a.store || '').localeCompare(b.store_name || b.store || ''))
     }
     return result
-  }, [actions, filterStore, filterUrgency, filterCategory, filterStatus, search, sortBy, decisions])
+  }, [actions, filterStore, filterVendor, filterUrgency, filterCategory, filterStatus, search, sortBy, decisions])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   useEffect(() => { if (page > totalPages) setPage(totalPages) }, [totalPages])
@@ -723,6 +768,38 @@ function App() {
         .catch(() => showToast('Error de conexion', 'error'))
     }
   }, [brand, week, authFetch])
+
+  // Sidebar: approve all pending for a store/vendor (uses full actions, not filtered)
+  const handleSidebarApprove = useCallback((groupName, groupField) => {
+    const pending = actions.filter(a => {
+      const name = groupField === 'store' ? (a.store_name || a.store) : (a.vendor_brand || 'Other')
+      return name === groupName && !decisions[`${a.parent_sku}-${a.store}`]
+    })
+    if (pending.length > 100 && !confirm(`Aprobar ${pending.length} acciones pendientes?`)) return
+    bulkDecide(pending, 'approved')
+  }, [actions, decisions, bulkDecide])
+
+  // Sidebar: select a store/vendor
+  const handleSidebarSelect = useCallback((name) => {
+    if (viewMode === 'tiendas') {
+      setFilterStore(name)
+    } else if (viewMode === 'marcas') {
+      setFilterVendor(name)
+    }
+    setPage(1)
+  }, [viewMode])
+
+  // Switch view mode
+  const switchViewMode = useCallback((mode) => {
+    setViewMode(mode)
+    setFilterStore('all')
+    setFilterVendor(null)
+    setFilterStatus('all')
+    setFilterUrgency('all')
+    setFilterCategory('all')
+    setSearch('')
+    setPage(1)
+  }, [])
 
   const reviewedCount = Object.keys(decisions).length
   const approvedItems = actions.filter(a => decisions[`${a.parent_sku}-${a.store}`] === 'approved')
@@ -867,6 +944,30 @@ function App() {
         })()}
       </div>
 
+      <div className="view-toggle">
+        <button className={`vt-btn ${viewMode === 'list' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('list')}>Lista</button>
+        <button className={`vt-btn ${viewMode === 'tiendas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('tiendas')}>
+          <Store size={13} /> Tiendas
+        </button>
+        {isMultiVendor && (
+          <button className={`vt-btn ${viewMode === 'marcas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('marcas')}>
+            <Tag size={13} /> Marcas
+          </button>
+        )}
+      </div>
+
+      <div className={`dashboard-body ${viewMode !== 'list' ? 'dashboard-body--sidebar' : ''}`}>
+      {viewMode === 'tiendas' && (
+        <StoreSidebar roster={storeRoster} activeItem={filterStore !== 'all' ? filterStore : null}
+                      onSelect={name => handleSidebarSelect(name)} onApprove={name => handleSidebarApprove(name, 'store')}
+                      canApprove={canApprove} title="Tiendas" />
+      )}
+      {viewMode === 'marcas' && (
+        <StoreSidebar roster={vendorRoster} activeItem={filterVendor}
+                      onSelect={name => handleSidebarSelect(name)} onApprove={name => handleSidebarApprove(name, 'vendor')}
+                      canApprove={canApprove} title="Marcas" />
+      )}
+      <div className="main-content">
       <div className="toolbar">
         <div className="search-box">
           <Search size={15} />
@@ -1009,6 +1110,9 @@ function App() {
           </div>
         </section>
       )}
+
+      </div>{/* main-content */}
+      </div>{/* dashboard-body */}
 
       {showAdmin && <AdminPanel authFetch={authFetch} onClose={() => setShowAdmin(false)} />}
 
