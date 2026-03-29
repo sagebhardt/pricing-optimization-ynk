@@ -106,6 +106,13 @@ def make_catboost(is_cls, params):
     return CatBoostRegressor(**params)
 
 
+def make_rf(is_cls, params):
+    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+    if is_cls:
+        return RandomForestClassifier(**params)
+    return RandomForestRegressor(**params)
+
+
 # ── Hyperparameter configs (comparable across frameworks) ─────────────────
 
 def get_params(framework, is_cls, n_samples, pos_rate=None):
@@ -168,11 +175,25 @@ def get_params(framework, is_cls, n_samples, pos_rate=None):
                          "l2_leaf_reg": 1.0})
         return base
 
+    elif framework == "random_forest":
+        base = {
+            "n_estimators": 500,
+            "max_depth": 15 if large else 12,
+            "min_samples_leaf": 5,
+            "max_features": "sqrt",
+            "n_jobs": -1,
+            "random_state": 42,
+        }
+        if is_cls and pos_rate:
+            base["class_weight"] = "balanced"
+        return base
+
 
 FACTORIES = {
     "xgboost": make_xgb,
     "lightgbm": make_lgbm,
     "catboost": make_catboost,
+    "random_forest": make_rf,
 }
 
 
@@ -230,7 +251,7 @@ def compare_brand(brand: str):
     print(f"  Samples: {n_samples:,} train, {len(X_hold_c):,} holdout | Pos rate: {pos_rate:.1%}")
 
     cls_results = {}
-    for fw_name in ["xgboost", "lightgbm", "catboost"]:
+    for fw_name in FACTORIES:
         params = get_params(fw_name, is_cls=True, n_samples=n_samples, pos_rate=pos_rate)
         model = FACTORIES[fw_name](is_cls=True, params=params)
         t0 = time.time()
@@ -272,7 +293,7 @@ def compare_brand(brand: str):
     print(f"  Samples: {len(X_train_r):,} train, {len(X_hold_r):,} holdout")
 
     reg_results = {}
-    for fw_name in ["xgboost", "lightgbm", "catboost"]:
+    for fw_name in FACTORIES:
         params = get_params(fw_name, is_cls=False, n_samples=len(X_train_r))
         model = FACTORIES[fw_name](is_cls=False, params=params)
         t0 = time.time()
