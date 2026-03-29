@@ -158,6 +158,97 @@ def _load_model_info_impl(brand: str) -> dict:
         return {}
 
 
+# ── SHAP features (read-only, for analytics panel) ───────────────────────────
+
+def load_shap_features(brand: str, kind: str = "classifier") -> list:
+    """Load SHAP feature importance. kind: 'classifier' or 'regressor'."""
+    return _cached(f"shap:{brand}:{kind}", lambda: _load_shap_impl(brand, kind), ttl=3600)
+
+
+def _load_shap_impl(brand: str, kind: str) -> list:
+    import pandas as pd
+    filename = f"{kind}_shap.csv"
+
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            blob = bucket.blob(f"models/{brand.lower()}/{filename}")
+            if blob.exists():
+                import io
+                df = pd.read_csv(io.StringIO(blob.download_as_text()))
+                return df.head(10).to_dict(orient="records")
+        except Exception:
+            pass
+
+    fp = _BASE_DIR / "models" / brand.lower() / filename
+    try:
+        df = pd.read_csv(fp)
+        return df.head(10).to_dict(orient="records")
+    except FileNotFoundError:
+        return []
+
+
+# ── Elasticity summary (read-only, for analytics panel) ──────────────────────
+
+def load_elasticity_summary(brand: str) -> dict:
+    """Load elasticity data grouped by subcategory."""
+    return _cached(f"elasticity:{brand}", lambda: _load_elasticity_impl(brand), ttl=3600)
+
+
+def _load_elasticity_impl(brand: str) -> dict:
+    import pandas as pd
+
+    # Try SKU-level parquet (richer data)
+    df = None
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            blob = bucket.blob(f"models/{brand.lower()}/elasticity_by_sku.parquet")
+            if blob.exists():
+                import io
+                df = pd.read_parquet(io.BytesIO(blob.download_as_bytes()))
+        except Exception:
+            pass
+
+    if df is None:
+        fp = _BASE_DIR / "data" / "processed" / brand.lower() / "elasticity_by_sku.parquet"
+        try:
+            df = pd.read_parquet(fp)
+        except FileNotFoundError:
+            return {"total": 0, "by_subcategory": []}
+
+    if len(df) == 0:
+        return {"total": 0, "by_subcategory": []}
+
+    # Summary stats
+    elas = df["elasticity"].dropna()
+    total = len(elas)
+    summary = {
+        "total": total,
+        "median": round(float(elas.median()), 3) if total > 0 else None,
+        "elastic_count": int((elas < -1).sum()),
+        "inelastic_count": int((elas > -0.5).sum()),
+        "by_confidence": df["confidence"].value_counts().to_dict() if "confidence" in df.columns else {},
+    }
+
+    # By subcategory
+    by_sub = []
+    if "segunda_jerarquia" in df.columns:
+        for sub, group in df.groupby("segunda_jerarquia"):
+            e = group["elasticity"].dropna()
+            if len(e) >= 3:
+                by_sub.append({
+                    "subcategory": str(sub),
+                    "median_elasticity": round(float(e.median()), 3),
+                    "sku_count": len(e),
+                    "high_confidence": int((group["confidence"] == "high").sum()) if "confidence" in group.columns else 0,
+                })
+        by_sub.sort(key=lambda x: x["median_elasticity"])
+
+    summary["by_subcategory"] = by_sub
+    return summary
+
+
 # ── Decisions ─────────────────────────────────────────────────────────────────
 
 def load_decisions(brand: str, week: str = None) -> dict:

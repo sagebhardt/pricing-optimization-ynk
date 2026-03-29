@@ -49,7 +49,7 @@ async def auth_middleware(request: Request, call_next):
     if not GOOGLE_CLIENT_ID:
         request.state.user = {
             "email": "dev@local", "name": "Developer", "picture": "",
-            "role": "admin", "permissions": ["approve", "audit", "export", "manage", "read"],
+            "role": "admin", "permissions": ["approve", "audit", "export", "manage", "plan", "read"],
             "brands": None,
         }
         return await call_next(request)
@@ -248,13 +248,13 @@ def admin_set_user(payload: UserPayload, request: Request):
     user = _get_user(request)
     if "manage" not in user.get("permissions", []):
         raise HTTPException(403, "Admin access required")
-    if payload.role not in ("admin", "brand_manager", "viewer"):
+    if payload.role not in ("admin", "brand_manager", "planner", "viewer"):
         raise HTTPException(400, "Invalid role")
 
     cfg = storage.load_user_config()
     cfg.setdefault("users", {})[payload.email.lower().strip()] = {
         "role": payload.role,
-        "brands": payload.brands if payload.role == "brand_manager" else None,
+        "brands": payload.brands if payload.role in ("brand_manager", "planner") else None,
         "name": payload.name or "",
     }
     storage.save_user_config(cfg)

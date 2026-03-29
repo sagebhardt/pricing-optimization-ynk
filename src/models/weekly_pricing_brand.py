@@ -175,7 +175,7 @@ def compute_expected_velocity(current_vel, current_disc, new_disc, elasticity):
             0.30: 3.0,   # 30% -> ~200% more
             0.40: 4.0,   # 40% -> ~300% more
         }
-        lift = lift_by_step.get(new_disc, 1 + disc_change * 5)
+        lift = lift_by_step.get(new_disc, 1 + price_change_pct * 5)
         return max(current_vel * lift, 0.5)
 
 
@@ -836,6 +836,10 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
     actions_df["_urgency_sort"] = actions_df["urgency"].map(urgency_order)
     actions_df = actions_df.sort_values(["_urgency_sort", "rev_delta"], ascending=[True, False])
     actions_df.drop(columns=["_urgency_sort"], inplace=True)
+
+    # Add vendor brand for multi-brand banners
+    from config.vendor_brands import get_vendor_brand
+    actions_df["vendor_brand"] = actions_df["parent_sku"].apply(get_vendor_brand)
 
     # Save
     filename = f"pricing_actions_{target_week.date()}"

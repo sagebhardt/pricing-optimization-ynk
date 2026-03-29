@@ -7,8 +7,9 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 # Role permissions
 ROLE_PERMISSIONS = {
-    "admin": {"read", "approve", "export", "audit", "manage"},
+    "admin": {"read", "approve", "export", "audit", "manage", "plan"},
     "brand_manager": {"read", "approve", "export", "audit"},
+    "planner": {"read", "plan", "export", "audit"},
     "viewer": {"read"},
 }
 

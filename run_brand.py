@@ -72,6 +72,17 @@ def sync_to_gcs(brand: str):
     if meta_path.exists():
         _upload(meta_path, f"models/{brand_lower}/training_metadata.json")
 
+    # 4. SHAP feature importance (for analytics panel)
+    for shap_file in ["classifier_shap.csv", "regressor_shap.csv"]:
+        sp = PROJECT_ROOT / "models" / brand_lower / shap_file
+        if sp.exists():
+            _upload(sp, f"models/{brand_lower}/{shap_file}")
+
+    # 5. Elasticity data (for analytics panel)
+    elast_sku_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "elasticity_by_sku.parquet"
+    if elast_sku_path.exists():
+        _upload(elast_sku_path, f"models/{brand_lower}/elasticity_by_sku.parquet")
+
     print(f"  Synced {uploaded} files to GCS")
 
 
