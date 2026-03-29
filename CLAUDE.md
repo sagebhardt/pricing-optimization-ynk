@@ -254,5 +254,6 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - ti.productos costs have mixed currencies (USD/CLP) — using 1000x heuristic for conversion
 - BELSPORT regressor R2 (CV=0.538) improved significantly but holdout (0.704) suggests more room
 - Size curve alerts filtered to latest week only (BELSPORT was generating 3.4M rows across all weeks)
-- Some vendor brand prefix codes are unverified (AL, LT, SH, UM, QS, MN, ML, SC, BL, KP) — may need correction
+- Vendor brand prefixes verified from production data; OAKLEY "Other" = optical services (SERV/SFSS), expected
+- Lifecycle thresholds validated: velocity monotonically decreases peak→steady→decline across all brands
 - `api/static/` is gitignored — must run `cp -r dashboard/dist api/static` before API deploy
