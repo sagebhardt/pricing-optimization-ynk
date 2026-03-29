@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import pandas as pd
 import numpy as np
 import xgboost as xgb
+import lightgbm as lgb
 from sklearn.metrics import (
     roc_auc_score, average_precision_score, precision_score,
     recall_score, f1_score, mean_absolute_error, mean_squared_error, r2_score,
@@ -100,8 +101,13 @@ def ts_cv(X, y, weeks, params, n_splits=4, is_cls=True):
                 "f1": f1_score(yv, p, zero_division=0),
             })
         else:
-            m = xgb.XGBRegressor(**params)
-            m.fit(Xt, yt, eval_set=[(Xv, yv)], verbose=False)
+            constructor_params = {k: v for k, v in params.items() if k not in ("eval_metric", "early_stopping_rounds")}
+            m = lgb.LGBMRegressor(verbose=-1, **constructor_params)
+            callbacks = [lgb.log_evaluation(-1)]
+            es = params.get("early_stopping_rounds", 30)
+            if es:
+                callbacks.insert(0, lgb.early_stopping(es, verbose=False))
+            m.fit(Xt, yt, eval_set=[(Xv, yv)], callbacks=callbacks)
             p = m.predict(Xv)
             results.append({
                 "fold": fold,
@@ -289,14 +295,13 @@ def train_brand_models(brand: str):
         "colsample_bytree": 0.7,
         "reg_alpha": 0.1,
         "reg_lambda": 1.0,
-        "eval_metric": "rmse",
-        "early_stopping_rounds": 30,
         "n_jobs": -1,
         "random_state": 42,
     }
+    _reg_cv_params = {"eval_metric": "rmse", "early_stopping_rounds": 30}
     reg_params.update(BRAND_REG_OVERRIDES.get(brand, {}))
 
-    reg_results = ts_cv(X, y, w, reg_params, n_splits=2, is_cls=False)
+    reg_results = ts_cv(X, y, w, {**reg_params, **_reg_cv_params}, n_splits=2, is_cls=False)
     v2_mae = np.mean([r["mae"] for r in reg_results])
     v2_r2 = np.mean([r["r2"] for r in reg_results])
 
@@ -322,8 +327,8 @@ def train_brand_models(brand: str):
             df_disc_holdout = df_holdout[df_holdout["will_discount_4w"] == 1].copy()
         Xh, yh, _, _ = prepare(df_disc_holdout, reg_target)
         if len(Xh) > 0:
-            holdout_reg = xgb.XGBRegressor(**{k: v for k, v in reg_params.items() if k not in ("early_stopping_rounds", "eval_metric")})
-            holdout_reg.fit(X, y, verbose=False)
+            holdout_reg = lgb.LGBMRegressor(verbose=-1, **reg_params)
+            holdout_reg.fit(X, y, callbacks=[lgb.log_evaluation(-1)])
             p_h = holdout_reg.predict(Xh)
             reg_holdout_metrics = {
                 "mae": float(mean_absolute_error(yh, p_h)),
@@ -335,9 +340,8 @@ def train_brand_models(brand: str):
 
     # Train final model on ALL data for production
     X_all_reg, y_all_reg, _, fcols_reg = prepare(df_disc_all, reg_target)
-    final_reg_params = {k: v for k, v in reg_params.items() if k not in ("early_stopping_rounds", "eval_metric")}
-    reg_model = xgb.XGBRegressor(**final_reg_params)
-    reg_model.fit(X_all_reg, y_all_reg, verbose=False)
+    reg_model = lgb.LGBMRegressor(verbose=-1, **reg_params)
+    reg_model.fit(X_all_reg, y_all_reg, callbacks=[lgb.log_evaluation(-1)])
 
     explainer = shap.TreeExplainer(reg_model)
     X_sample = X_all_reg.sample(min(2000, len(X_all_reg)), random_state=42)

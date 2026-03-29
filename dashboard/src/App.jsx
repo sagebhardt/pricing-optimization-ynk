@@ -538,7 +538,7 @@ function App() {
   const PAGE_SIZE = 50
 
   const MULTI_VENDOR_BRANDS = ['bold', 'bamers', 'belsport']
-  const isMultiVendor = brand && MULTI_VENDOR_BRANDS.includes(brand.id)
+  const isMultiVendorBrand = brand && MULTI_VENDOR_BRANDS.includes(brand.id)
 
   // Permissions
   const canApprove = user?.permissions?.includes('approve')
@@ -610,9 +610,11 @@ function App() {
     if (window.google?.accounts?.id) google.accounts.id.disableAutoSelect()
   }, [])
 
+  const toastTimerRef = useRef(null)
   const showToast = useCallback((msg, type = 'info') => {
+    clearTimeout(toastTimerRef.current)
     setToast({ msg, type })
-    setTimeout(() => setToast(null), 3500)
+    toastTimerRef.current = setTimeout(() => setToast(null), 3500)
   }, [])
 
   // ── Data loading ──
@@ -696,13 +698,20 @@ function App() {
   }, [actions, decisions])
 
   // Vendor brand roster for sidebar navigation (multi-brand only)
-  const vendorRoster = useMemo(() => {
-    if (!isMultiVendor) return []
+  // Decide whether to group sidebar by vendor brand or subcategory:
+  // use vendor if multi-vendor brand with >1 distinct vendor, otherwise use subcategory
+  const useVendorGrouping = useMemo(() => {
+    if (!isMultiVendorBrand) return false
+    const vendors = new Set(actions.map(a => a.vendor_brand || 'Other'))
+    return vendors.size > 1
+  }, [actions, isMultiVendorBrand])
+
+  const groupRoster = useMemo(() => {
     const map = {}
     actions.forEach(a => {
-      const vb = a.vendor_brand || 'Other'
-      if (!map[vb]) map[vb] = { key: vb, name: vb, total: 0, pending: 0, decided: 0, highCount: 0, medCount: 0, revDelta: 0 }
-      const s = map[vb]
+      const key = useVendorGrouping ? (a.vendor_brand || 'Other') : (a.subcategory || 'Other')
+      if (!map[key]) map[key] = { key, name: key, total: 0, pending: 0, decided: 0, highCount: 0, medCount: 0, revDelta: 0 }
+      const s = map[key]
       s.total++
       const dec = decisions[`${a.parent_sku}-${a.store}`]
       if (dec) { s.decided++ } else { s.pending++ }
@@ -711,13 +720,16 @@ function App() {
       s.revDelta += Number(a.rev_delta) || 0
     })
     return Object.values(map).sort((a, b) => b.pending - a.pending || b.total - a.total)
-  }, [actions, decisions, isMultiVendor])
+  }, [actions, decisions, useVendorGrouping])
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     let result = actions.filter(a => {
       if (filterStore !== 'all' && (a.store_name || a.store) !== filterStore) return false
-      if (filterVendor && (a.vendor_brand || 'Other') !== filterVendor) return false
+      if (filterVendor) {
+        const val = useVendorGrouping ? (a.vendor_brand || 'Other') : (a.subcategory || 'Other')
+        if (val !== filterVendor) return false
+      }
       if (filterUrgency !== 'all') {
         if (filterUrgency === 'INCREASE' && a.action_type !== 'increase') return false
         if (filterUrgency !== 'INCREASE' && (a.urgency !== filterUrgency || a.action_type === 'increase')) return false
@@ -747,10 +759,10 @@ function App() {
       result.sort((a, b) => (a.store_name || a.store || '').localeCompare(b.store_name || b.store || ''))
     }
     return result
-  }, [actions, filterStore, filterVendor, filterUrgency, filterCategory, filterStatus, search, sortBy, decisions])
+  }, [actions, filterStore, filterVendor, filterUrgency, filterCategory, filterStatus, search, sortBy, decisions, useVendorGrouping])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  useEffect(() => { if (page > totalPages) setPage(totalPages) }, [totalPages])
+  useEffect(() => { if (page > totalPages) setPage(totalPages) }, [page, totalPages])
   const paged = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page])
   const increases = useMemo(() => paged.filter(a => a.action_type === 'increase'), [paged])
   const decreases = useMemo(() => paged.filter(a => a.action_type !== 'increase'), [paged])
@@ -842,12 +854,14 @@ function App() {
   // Sidebar: approve all pending for a store/vendor (uses full actions, not filtered)
   const handleSidebarApprove = useCallback((groupName, groupField) => {
     const pending = actions.filter(a => {
-      const name = groupField === 'store' ? (a.store_name || a.store) : (a.vendor_brand || 'Other')
+      let name
+      if (groupField === 'store') name = a.store_name || a.store
+      else name = useVendorGrouping ? (a.vendor_brand || 'Other') : (a.subcategory || 'Other')
       return name === groupName && !decisions[`${a.parent_sku}-${a.store}`]
     })
     if (pending.length > 100 && !confirm(`Aprobar ${pending.length} acciones pendientes?`)) return
     bulkDecide(pending, 'approved')
-  }, [actions, decisions, bulkDecide])
+  }, [actions, decisions, bulkDecide, useVendorGrouping])
 
   // Sidebar: select a store/vendor
   const handleSidebarSelect = useCallback((name) => {
@@ -1037,11 +1051,9 @@ function App() {
         <button className={`vt-btn ${viewMode === 'tiendas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('tiendas')}>
           <Store size={13} /> Tiendas
         </button>
-        {isMultiVendor && (
-          <button className={`vt-btn ${viewMode === 'marcas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('marcas')}>
-            <Tag size={13} /> Marcas
-          </button>
-        )}
+        <button className={`vt-btn ${viewMode === 'marcas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('marcas')}>
+          <Tag size={13} /> {useVendorGrouping ? 'Marcas' : 'Categorias'}
+        </button>
       </div>
 
       <div className={`dashboard-body ${viewMode !== 'list' ? 'dashboard-body--sidebar' : ''}`}>
@@ -1051,9 +1063,9 @@ function App() {
                       canApprove={canApprove} title="Tiendas" />
       )}
       {viewMode === 'marcas' && (
-        <StoreSidebar roster={vendorRoster} activeItem={filterVendor}
+        <StoreSidebar roster={groupRoster} activeItem={filterVendor}
                       onSelect={name => handleSidebarSelect(name)} onApprove={name => handleSidebarApprove(name, 'vendor')}
-                      canApprove={canApprove} title="Marcas" />
+                      canApprove={canApprove} title={useVendorGrouping ? 'Marcas' : 'Categorias'} />
       )}
       <div className="main-content">
       <div className="toolbar">
@@ -1081,7 +1093,7 @@ function App() {
             <option value="MEDIUM">Media</option>
             <option value="LOW">Baja</option>
           </select>
-          {categories.length > 1 && (
+          {categories.length > 1 && !(viewMode === 'marcas' && !useVendorGrouping) && (
             <select value={filterCategory} onChange={e => { setFilterCategory(e.target.value); setPage(1) }}>
               <option value="all">Toda categoria</option>
               {categories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1107,11 +1119,11 @@ function App() {
               <>
                 <button className="tbtn tbtn--approve" onClick={() => {
                   if (pendingInFilter > 100 && !confirm(`Aprobar ${pendingInFilter} acciones pendientes?`)) return
-                  bulkDecide(filtered, 'approved')
+                  bulkDecide(filtered.filter(a => !decisions[`${a.parent_sku}-${a.store}`]), 'approved')
                 }}><Check size={13} /> Aprobar ({pendingInFilter})</button>
                 <button className="tbtn tbtn--reject" onClick={() => {
                   if (pendingInFilter > 100 && !confirm(`Rechazar ${pendingInFilter} acciones pendientes?`)) return
-                  bulkDecide(filtered, 'rejected')
+                  bulkDecide(filtered.filter(a => !decisions[`${a.parent_sku}-${a.store}`]), 'rejected')
                 }}><X size={13} /> Rechazar ({pendingInFilter})</button>
               </>
             )

@@ -83,6 +83,11 @@ def sync_to_gcs(brand: str):
     if elast_sku_path.exists():
         _upload(elast_sku_path, f"models/{brand_lower}/elasticity_by_sku.parquet")
 
+    # 6. Features parquet (for offline analysis / clustering experiments)
+    feat_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "features_parent.parquet"
+    if feat_path.exists():
+        _upload(feat_path, f"data/processed/{brand_lower}/features_parent.parquet")
+
     print(f"  Synced {uploaded} files to GCS")
 
 

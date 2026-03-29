@@ -60,6 +60,13 @@ def load_pricing_actions(brand: str) -> dict:
 def _load_pricing_actions_impl(brand: str) -> dict:
     import pandas as pd
 
+    def _ensure_vendor_brand(df, brand):
+        """Add vendor_brand column if missing (for CSVs generated before the column was added)."""
+        if "vendor_brand" not in df.columns and "parent_sku" in df.columns:
+            from config.vendor_brands import get_vendor_brand
+            df["vendor_brand"] = df["parent_sku"].apply(lambda s: get_vendor_brand(s, brand))
+        return df
+
     # Try GCS first
     if _use_gcs():
         try:
@@ -70,6 +77,7 @@ def _load_pricing_actions_impl(brand: str) -> dict:
                 import io
                 content = blobs[-1].download_as_text()
                 df = pd.read_csv(io.StringIO(content)).fillna("")
+                df = _ensure_vendor_brand(df, brand)
                 week = blobs[-1].name.split("pricing_actions_")[1].replace(".csv", "")
                 return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
         except Exception:
@@ -82,6 +90,7 @@ def _load_pricing_actions_impl(brand: str) -> dict:
         if not files:
             return {"items": [], "week": None, "total": 0}
         df = pd.read_csv(files[-1]).fillna("")
+        df = _ensure_vendor_brand(df, brand)
         week = files[-1].stem.replace("pricing_actions_", "")
         return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
     except Exception:
@@ -246,6 +255,25 @@ def _load_elasticity_impl(brand: str) -> dict:
         by_sub.sort(key=lambda x: x["median_elasticity"])
 
     summary["by_subcategory"] = by_sub
+
+    # By vendor brand (for multi-brand banners)
+    by_vendor = []
+    if "codigo_padre" in df.columns:
+        from config.vendor_brands import get_vendor_brand
+        df["_vendor"] = df["codigo_padre"].apply(lambda s: get_vendor_brand(s, brand))
+        for vb, group in df.groupby("_vendor"):
+            e = group["elasticity"].dropna()
+            if len(e) >= 3:
+                by_vendor.append({
+                    "vendor_brand": str(vb),
+                    "median_elasticity": round(float(e.median()), 3),
+                    "sku_count": len(e),
+                    "high_confidence": int((group["confidence"] == "high").sum()) if "confidence" in group.columns else 0,
+                })
+        by_vendor.sort(key=lambda x: x["median_elasticity"])
+        df.drop(columns=["_vendor"], inplace=True)
+    summary["by_vendor_brand"] = by_vendor
+
     return summary
 
 

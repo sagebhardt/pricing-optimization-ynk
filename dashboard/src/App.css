@@ -232,7 +232,7 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .admin-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .admin-form input, .admin-form select { font-family: var(--font-body); font-size: 13px; padding: 7px 10px; border: 1px solid var(--slate-200); border-radius: var(--radius); background: #fff; }
 .admin-form input { flex: 1; min-width: 160px; }
-.admin-brands { display: flex; gap: 10px; flex-basis: 100%; padding-top: 4px; }
+.admin-brands { display: flex; flex-wrap: wrap; gap: 8px 10px; flex-basis: 100%; padding-top: 4px; }
 .admin-brand-check { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--slate-600); }
 .admin-save { background: var(--slate-900); color: #fff; border: none; font-family: var(--font-body); font-size: 12px; font-weight: 600; padding: 7px 16px; border-radius: var(--radius); cursor: pointer; }
 .admin-save:hover { background: var(--slate-700); }

@@ -73,7 +73,9 @@ function SectionModelo({ data }) {
 
 function SectionElasticidad({ data }) {
   if (!data || !data.total) return null
-  const { total, median, elastic_count, inelastic_count, by_confidence, by_subcategory } = data
+  const { total, median, elastic_count, inelastic_count, by_confidence, by_subcategory, by_vendor_brand } = data
+  const showVendor = by_vendor_brand?.length > 1
+  const tableData = showVendor ? by_vendor_brand : by_subcategory
 
   return (
     <div className="an-section">
@@ -103,14 +105,14 @@ function SectionElasticidad({ data }) {
           ))}
         </div>
       )}
-      {by_subcategory?.length > 0 && (
+      {tableData?.length > 0 && (
         <div className="an-elast-table">
           <div className="an-elast-header">
-            <span>Subcategoria</span><span>Elasticidad</span><span>SKUs</span>
+            <span>{showVendor ? 'Marca' : 'Subcategoria'}</span><span>Elasticidad</span><span>SKUs</span>
           </div>
-          {by_subcategory.map((row, i) => (
+          {tableData.map((row, i) => (
             <div key={i} className="an-elast-row">
-              <span className="an-elast-subcat">{row.subcategory}</span>
+              <span className="an-elast-subcat">{showVendor ? row.vendor_brand : row.subcategory}</span>
               <span className={`an-elast-val ${row.median_elasticity < -1 ? 'an-elastic' : row.median_elasticity > -0.5 ? 'an-inelastic' : ''}`}>
                 {row.median_elasticity?.toFixed(2) ?? '\u2014'}
               </span>
@@ -218,12 +220,14 @@ export default function AnalyticsDrawer({ brand, authFetch }) {
 
   useEffect(() => {
     if (!brand) return
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
-    authFetch(`/analytics/${brand}`)
+    authFetch(`/analytics/${brand}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
-      .catch(e => { setError(e.message); setLoading(false) })
+      .catch(e => { if (e.name !== 'AbortError') { setError(e.message); setLoading(false) } })
+    return () => controller.abort()
   }, [brand, authFetch])
 
   if (loading) return <div className="an-drawer"><div className="an-loading">Cargando analytics...</div></div>

@@ -839,7 +839,7 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
 
     # Add vendor brand for multi-brand banners
     from config.vendor_brands import get_vendor_brand
-    actions_df["vendor_brand"] = actions_df["parent_sku"].apply(get_vendor_brand)
+    actions_df["vendor_brand"] = actions_df["parent_sku"].apply(lambda s: get_vendor_brand(s, brand))
 
     # Save
     filename = f"pricing_actions_{target_week.date()}"

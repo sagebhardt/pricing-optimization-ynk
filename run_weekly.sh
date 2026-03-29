@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # All active brands
-ALL_BRANDS=(HOKA BOLD BAMERS OAKLEY)
+ALL_BRANDS=(HOKA BOLD BAMERS OAKLEY BELSPORT)
 BRANDS=("${@:-${ALL_BRANDS[@]}}")
 
 LOG_DIR="logs"
@@ -32,7 +32,7 @@ for BRAND in "${BRANDS[@]}"; do
     echo "--- $BRAND ---"
     BRAND_LOG="$LOG_DIR/${BRAND,,}_${TIMESTAMP}.log"
 
-    if python3 run_brand.py "$BRAND" --steps extract features enhance aggregate train pricing sync > "$BRAND_LOG" 2>&1; then
+    if python3 run_brand.py "$BRAND" --steps extract elasticity features lifecycle size_curve enhance aggregate train pricing sync > "$BRAND_LOG" 2>&1; then
         ACTIONS_FILE=$(ls -t weekly_actions/${BRAND,,}/pricing_actions_*.csv 2>/dev/null | head -1)
         if [ -n "$ACTIONS_FILE" ]; then
             N_ACTIONS=$(tail -n +2 "$ACTIONS_FILE" | wc -l | tr -d ' ')

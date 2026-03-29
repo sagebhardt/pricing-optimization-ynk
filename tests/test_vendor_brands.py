@@ -83,6 +83,29 @@ class TestGetVendorBrand:
             assert get_vendor_brand(prefix + "999") == brand, f"{prefix} should map to {brand}"
 
 
+class TestBrandOverrides:
+    """Brand-specific prefix overrides."""
+
+    def test_belsport_lotto(self):
+        assert get_vendor_brand("LT1234", "BELSPORT") == "Lotto"
+
+    def test_belsport_alphabet(self):
+        assert get_vendor_brand("AL5678", "BELSPORT") == "Alphabet"
+
+    def test_default_lacoste(self):
+        assert get_vendor_brand("LT1234") == "Lacoste"
+
+    def test_default_alpinestars(self):
+        assert get_vendor_brand("AL5678") == "Alpinestars"
+
+    def test_bold_uses_default(self):
+        assert get_vendor_brand("LT1234", "BOLD") == "Lacoste"
+        assert get_vendor_brand("AL5678", "BOLD") == "Alpinestars"
+
+    def test_belsport_non_overridden_uses_default(self):
+        assert get_vendor_brand("NI1234", "BELSPORT") == "Nike"
+
+
 class TestIsEcommStore:
     """Ecommerce store detection from store codes."""
 

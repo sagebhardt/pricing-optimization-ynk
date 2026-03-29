@@ -36,9 +36,10 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
 
   useEffect(() => {
     if (!brand) return
+    const controller = new AbortController()
     setLoading(true)
     setSelected(new Set())  // reset selection on brand change
-    authFetch(`/decisions/planner-queue?brand=${brand}`)
+    authFetch(`/decisions/planner-queue?brand=${brand}`, { signal: controller.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
@@ -48,7 +49,8 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
         setWeek(data.week)
         setLoading(false)
       })
-      .catch(e => { setLoading(false); showToast?.(e.message || 'Error cargando cola', 'error') })
+      .catch(e => { if (e.name !== 'AbortError') { setLoading(false); showToast?.(e.message || 'Error cargando cola', 'error') } })
+    return () => controller.abort()
   }, [brand, authFetch])
 
   const toggleSelect = (key) => {

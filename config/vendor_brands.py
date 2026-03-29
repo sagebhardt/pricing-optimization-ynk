@@ -44,6 +44,14 @@ VENDOR_BRAND_PREFIXES = {
     "KP": "Kappa",
 }
 
+# Brand-specific overrides: same prefix means different vendors in different banners
+_BRAND_OVERRIDES = {
+    "BELSPORT": {
+        "LT": "Lotto",
+        "AL": "Alphabet",
+    },
+}
+
 # Pre-sorted keys for lookup (longest first)
 _SORTED_PREFIXES = sorted(VENDOR_BRAND_PREFIXES.keys(), key=len, reverse=True)
 
@@ -51,11 +59,17 @@ _SORTED_PREFIXES = sorted(VENDOR_BRAND_PREFIXES.keys(), key=len, reverse=True)
 MULTI_VENDOR_BRANDS = {"bold", "bamers", "belsport"}
 
 
-def get_vendor_brand(sku: str) -> str:
-    """Extract vendor brand from SKU prefix. Returns 'Other' if unknown."""
+def get_vendor_brand(sku: str, brand: str = None) -> str:
+    """Extract vendor brand from SKU prefix. Returns 'Other' if unknown.
+
+    brand: optional banner name for brand-specific prefix overrides.
+    """
     sku = str(sku).strip().upper()
+    overrides = _BRAND_OVERRIDES.get(brand.upper(), {}) if brand else {}
     for prefix in _SORTED_PREFIXES:
         if sku.startswith(prefix):
+            if prefix in overrides:
+                return overrides[prefix]
             return VENDOR_BRAND_PREFIXES[prefix]
     return "Other"
 
