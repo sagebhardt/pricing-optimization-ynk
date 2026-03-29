@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2 } from 'lucide-react'
+import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2 } from 'lucide-react'
+import AnalyticsDrawer from './AnalyticsDrawer'
 import './App.css'
 
 const BRANDS = [
@@ -506,6 +507,7 @@ function App() {
   const [copyMsg, setCopyMsg] = useState('')
   const [showAdmin, setShowAdmin] = useState(false)
   const [showExportConfirm, setShowExportConfirm] = useState(false)
+  const [showAnalytics, setShowAnalytics] = useState(false)
   const [toast, setToast] = useState(null)
   const [filterStatus, setFilterStatus] = useState('all')  // all | pending | approved | rejected
   const [sortBy, setSortBy] = useState('urgency')           // urgency | revenue | confidence | store
@@ -598,6 +600,7 @@ function App() {
     setFilterUrgency('all')
     setFilterCategory('all')
     setFilterStatus('all')
+    setShowAnalytics(false)
     setSortBy('urgency')
     setPage(1)
     setBrand(b)
@@ -901,6 +904,11 @@ function App() {
             <option value="store">Ordenar: Tienda</option>
           </select>
         </div>
+        <button className={`btn-analytics ${showAnalytics ? 'btn-analytics--active' : ''}`}
+                onClick={() => setShowAnalytics(!showAnalytics)}
+                title="Panel de analytics">
+          <BarChart2 size={15} /> Analisis
+        </button>
         <div className="toolbar-actions">
           <span className="result-count">{filtered.length} resultados</span>
           {canApprove && (() => {
@@ -923,6 +931,10 @@ function App() {
           )}
         </div>
       </div>
+
+      {showAnalytics && (
+        <AnalyticsDrawer brand={brand?.id} authFetch={authFetch} />
+      )}
 
       {totalPages > 1 && (
         <div className="pagination">

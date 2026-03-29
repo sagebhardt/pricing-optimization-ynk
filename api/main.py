@@ -56,7 +56,8 @@ async def auth_middleware(request: Request, call_next):
 
     # Non-API routes — serve SPA (frontend handles login)
     api_prefixes = ("/pricing", "/decisions", "/export", "/alerts", "/model",
-                    "/recommendations", "/sku/", "/audit", "/auth/me", "/admin", "/feedback")
+                    "/recommendations", "/sku/", "/audit", "/auth/me", "/admin", "/feedback",
+                    "/analytics")
     if not any(path.startswith(p) for p in api_prefixes):
         return await call_next(request)
 
@@ -179,6 +180,114 @@ def get_model_info(brand: Optional[str] = Query(None)):
             "avg_r2": reg.get("avg_r2"),
         },
         "note": meta.get("note", ""),
+    }
+
+
+@app.get("/analytics/{brand}")
+def get_analytics(brand: str, request: Request):
+    """Get analytics panel data for a brand: model health, elasticity, lifecycle, impact."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+
+    # Load data from caches
+    meta = storage.load_model_info(brand)
+    actions_data = storage.load_pricing_actions(brand)
+    items = actions_data.get("items", [])
+    shap_cls = storage.load_shap_features(brand, "classifier")
+    shap_reg = storage.load_shap_features(brand, "regressor")
+    elasticity = storage.load_elasticity_summary(brand)
+
+    # Model section
+    cls = meta.get("classifier", {})
+    reg = meta.get("regressor", {})
+    cls_holdout = cls.get("holdout") or {}
+    reg_holdout = reg.get("holdout") or {}
+
+    modelo = {
+        "classifier_auc": cls.get("avg_auc"),
+        "classifier_ap": cls.get("avg_precision"),
+        "regressor_r2": reg.get("avg_r2"),
+        "regressor_mae_pp": round(reg.get("avg_mae", 0) * 100, 1),
+        "n_samples": reg.get("n_samples"),
+        "n_features": cls.get("n_features"),
+        "holdout_auc": cls_holdout.get("auc"),
+        "holdout_r2": reg_holdout.get("r2"),
+        "training_mode": meta.get("training_mode"),
+        "classifier_shap": shap_cls[:5],
+        "regressor_shap": shap_reg[:5],
+    }
+
+    # Lifecycle / urgency distribution (derived from actions)
+    urgency_dist = {}
+    action_type_dist = {"increase": 0, "decrease": 0}
+    confidence_dist = {}
+    for item in items:
+        u = item.get("urgency", "LOW")
+        urgency_dist[u] = urgency_dist.get(u, 0) + 1
+        at = item.get("action_type", "decrease")
+        action_type_dist[at] = action_type_dist.get(at, 0) + 1
+        ct = item.get("confidence_tier", "LOW")
+        confidence_dist[ct] = confidence_dist.get(ct, 0) + 1
+
+    ciclo = {
+        "total_actions": len(items),
+        "urgency_dist": urgency_dist,
+        "action_type_dist": action_type_dist,
+        "confidence_dist": confidence_dist,
+    }
+
+    # Impact breakdown (derived from actions)
+    store_impact = {}
+    subcat_impact = {}
+    vendor_impact = {}
+    thin_margin_count = 0
+    for item in items:
+        rev = 0
+        margin = 0
+        try:
+            rev = int(item.get("rev_delta", 0) or 0)
+            margin = int(item.get("margin_delta", 0) or 0)
+        except (ValueError, TypeError):
+            pass
+        try:
+            mp = item.get("margin_pct")
+            if mp and mp != "" and float(mp) < 20:
+                thin_margin_count += 1
+        except (ValueError, TypeError):
+            pass
+
+        sn = item.get("store_name") or item.get("store", "?")
+        store_impact.setdefault(sn, {"store": item.get("store", ""), "store_name": sn, "rev_delta": 0, "margin_delta": 0, "count": 0})
+        store_impact[sn]["rev_delta"] += rev
+        store_impact[sn]["margin_delta"] += margin
+        store_impact[sn]["count"] += 1
+
+        sc = item.get("subcategory", "Other")
+        subcat_impact.setdefault(sc, {"subcategory": sc, "rev_delta": 0, "margin_delta": 0, "count": 0})
+        subcat_impact[sc]["rev_delta"] += rev
+        subcat_impact[sc]["margin_delta"] += margin
+        subcat_impact[sc]["count"] += 1
+
+        vb = item.get("vendor_brand", "Other")
+        vendor_impact.setdefault(vb, {"vendor_brand": vb, "rev_delta": 0, "margin_delta": 0, "count": 0})
+        vendor_impact[vb]["rev_delta"] += rev
+        vendor_impact[vb]["margin_delta"] += margin
+        vendor_impact[vb]["count"] += 1
+
+    impacto = {
+        "by_store": sorted(store_impact.values(), key=lambda x: abs(x["rev_delta"]), reverse=True)[:10],
+        "by_subcategory": sorted(subcat_impact.values(), key=lambda x: abs(x["rev_delta"]), reverse=True)[:10],
+        "by_vendor_brand": sorted(vendor_impact.values(), key=lambda x: abs(x["rev_delta"]), reverse=True)[:10],
+        "thin_margin_count": thin_margin_count,
+    }
+
+    return {
+        "brand": brand,
+        "modelo": modelo,
+        "elasticidad": elasticity,
+        "ciclo_de_vida": ciclo,
+        "impacto": impacto,
     }
 
 
