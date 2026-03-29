@@ -6,7 +6,7 @@ WORKDIR /app
 COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
-# Copy API code + config
+# Copy API code + config + dashboard static files
 COPY api/ api/
 COPY config/ config/
 
