@@ -24,11 +24,14 @@ python3 -m uvicorn api.main:app --port 8080
 # Start dashboard dev server
 cd dashboard && npm run dev
 
+# Run tests
+python3 -m pytest tests/ -v
+
 # Build + deploy (uses scripts/build.sh — safe swap with trap cleanup)
+cd dashboard && npm run build && cd ..            # Build dashboard
+rm -rf api/static && cp -r dashboard/dist api/static  # Copy to API static dir
 ./scripts/build.sh api --deploy        # API image + deploy to Cloud Run
 ./scripts/build.sh pipeline --deploy   # Pipeline image + update Cloud Run Job
-./scripts/build.sh api                 # Build only (no deploy)
-./scripts/build.sh pipeline            # Build only (no deploy)
 ```
 
 ## Architecture
@@ -51,11 +54,18 @@ Pipeline (runs in Cloud Run Job, Monday 6am CLT):
 API (Cloud Run, slim image ~50MB):
   Dockerfile                      # API image (no ML deps, no data)
   Dockerfile.pipeline             # Pipeline image (full ML + DB deps)
-  api/main.py                     # FastAPI (auth, decisions, export, admin, audit, feedback)
-  api/storage.py                  # GCS-backed reads (pricing actions, alerts, metadata)
+  api/main.py                     # FastAPI (auth, decisions, export, admin, audit, analytics, planner)
+  api/storage.py                  # GCS-backed reads (pricing actions, alerts, metadata, SHAP, elasticity)
+  api/pricing_math.py             # Pure-math pricing functions (anchor snapping, velocity estimation)
   config/auth.py                  # Google SSO roles, GCS-backed user config with cache
   config/database.py              # DB config, brand configs, store exclusions
+  config/vendor_brands.py         # SKU prefix → vendor brand mapping (Nike, Adidas, etc.)
   dashboard/src/App.jsx           # React dashboard (pagination, margin viz, admin panel)
+  dashboard/src/AnalyticsDrawer.jsx  # Analytics panel (model, elasticity, lifecycle, impact)
+  dashboard/src/StoreSidebar.jsx  # Store/vendor sidebar navigation
+  dashboard/src/ManualPriceModal.jsx # Manual price override with impact estimation
+  dashboard/src/ChainViewModal.jsx   # Chain-wide view (SKU across all stores)
+  dashboard/src/PlannerQueue.jsx  # Planner approval queue (two-step workflow)
 ```
 
 ## Two Docker Images
@@ -66,7 +76,7 @@ API (Cloud Run, slim image ~50MB):
 - Use `./scripts/build.sh pipeline` — handles the swap safely with `trap` cleanup.
 
 ## Cloud Infrastructure
-- **Cloud Run Service**: `pricing-api` (1 GiB, 1 CPU, min-instances=1)
+- **Cloud Run Service**: `pricing-api` (1 GiB, 1 CPU, min-instances=0)
 - **Cloud Run Job**: `pricing-pipeline` (32 GiB, 8 CPU, 2hr timeout)
 - **Cloud Scheduler**: `pricing-pipeline-weekly` (Monday 09:00 UTC / 6am CLT)
 - **GCS Bucket**: `gs://ynk-pricing-decisions`
@@ -79,13 +89,17 @@ API (Cloud Run, slim image ~50MB):
 - `GOOGLE_CLIENT_ID` env var — if empty, auth disabled (dev mode)
 - Bootstrap admin (hardcoded, can never be locked out): `sgr@ynk.cl`
 - Roles managed via admin panel in dashboard (gear icon) — stored in GCS
-  - **admin**: full access to all brands + user management
-  - **brand_manager**: approve/reject/export for assigned brands only
+  - **admin**: full access to all brands + user management + planner approval
+  - **brand_manager**: approve/reject/manual price for assigned brands only
+  - **planner**: reviews BM decisions, approves for export. Brand-scoped.
   - **viewer**: read-only (default for any @yaneken.cl or @ynk.cl email)
-- Brand-level enforcement: brand managers can only access their assigned brands
+- Brand-level enforcement: brand managers and planners can only access assigned brands
+- **Two-step workflow**: BM decides → Planner approves → Export available
+  - `REQUIRE_PLANNER_APPROVAL=true` env var enforces strict mode (only `planner_approved` exports)
+  - Default (soft rollout): legacy `approved`/`manual` export directly, new `bm_*` statuses need planner
 
 ## Persistence & Storage (GCS)
-- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/`
+- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/` (incl. SHAP CSVs, elasticity parquets)
 - Supplemental data: `data/raw/{brand}/costs.parquet`, `official_prices.parquet`
 - Decisions: `decisions/{brand}/decisions_{week}.json`
 - Audit log: `audit/{brand}/{YYYY-MM}.jsonl`
@@ -154,7 +168,7 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 | BOLD | BOLD | 35 | Margin-optimized | 0.648 | ti.productos (5,434 SKUs) |
 | BAMERS | BAMERS | 25 | Margin-optimized | 0.938 | ti.productos (2,084 SKUs) |
 | OAKLEY | OAKLEY | 8 | Margin-optimized | 0.800 | ti.productos (2,211 SKUs) |
-| BELSPORT | BELSPORT | 66 | Margin-optimized | 0.442 | ti.productos (6,422 SKUs) |
+| BELSPORT | BELSPORT | 66 | Margin-optimized | 0.538 (holdout 0.704) | ti.productos (6,422 SKUs) |
 
 ## Adding a New Brand
 1. Add entry to `config/database.py` BRANDS dict (banner, brand codes, stores)
@@ -166,36 +180,79 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 7. Costs auto-extracted from `ti.productos`. For manual override: upload `costs.parquet` to GCS.
 
 ## Dashboard UX
+- **View modes**: Lista (flat list), Tiendas (store sidebar), Marcas (vendor brand sidebar)
+- **Analytics panel**: "Analisis" button opens model health, elasticity, lifecycle, impact sections
+- **Manual price**: $ button per action → modal with debounced impact estimation, anchor snapping
+- **Chain-wide view**: "Ver en todas las tiendas" link → approve SKU across all/ecomm/B&M stores
+- **Planner queue**: "Cola Planner" tab for two-step approval workflow
 - Pagination: 50 items/page with top + bottom navigation
-- Status filter: all / pending / approved / rejected
+- Status filter: all / pending / approved / rejected / manual
 - Sort: urgency, revenue impact, confidence, store
 - Bulk actions: show pending count, confirm on 100+ items
 - Freshness banner: shows data week + undecided count
-- Export: confirmation dialog with summary before download
+- Export: confirmation dialog with summary before download (uses manual price when set)
 - Error toasts: visible feedback on save/export failures
-- Admin panel: manage users/roles without deploys (gear icon)
-- Audit log: tracks all approve/reject/export actions
+- Admin panel: manage users/roles (admin, brand_manager, planner, viewer) + brand assignments
+- Audit log: tracks all approve/reject/manual/chain/planner/export actions
+
+## Vendor Brand Mapping
+Multi-brand banners (BOLD, BAMERS, BELSPORT) carry products from multiple vendors. SKU prefix → vendor:
+- `config/vendor_brands.py`: prefix mapping (NI/NP→Nike, AD→Adidas, PM→Puma, JR→Jordan, etc.)
+- Longest-prefix-first matching (3-char CAH→Carhartt before 2-char)
+- `vendor_brand` column added to pricing actions CSV by pipeline
+- Store channels: AB* prefix = ecomm/logistics, all others = B&M
+
+## API Endpoints
+Key endpoints (all auth-protected except /health):
+- `GET /analytics/{brand}` — model health, elasticity, lifecycle, impact data
+- `POST /estimate-impact` — recalculate velocity/revenue/margin for manual price
+- `POST /decisions` — save decision (approve/reject/manual, optional chain_scope)
+- `POST /decisions/plan` — planner approves/rejects BM decisions
+- `GET /decisions/planner-queue` — items awaiting planner review
+- `GET /export/price-changes` — export approved items (respects manual prices + planner status)
+
+## Testing
+```bash
+python3 -m pytest tests/ -v           # 90 tests, <1s
+python3 -m pytest tests/ --cov=api    # with coverage
+```
+Test coverage: pricing_math (97%), vendor_brands (100%), API endpoints, pipeline lift table, role permissions.
+
+## Deploy Workflow
+```bash
+# Dashboard must be built before API deploy
+cd dashboard && npm run build && cd ..
+rm -rf api/static && cp -r dashboard/dist api/static
+./scripts/build.sh api --deploy
+./scripts/build.sh pipeline --deploy
+```
+`api/static/` is gitignored — it's a build artifact copied from `dashboard/dist/` before each API deploy.
 
 ## Pipeline Performance
 Each brand runs as a subprocess (memory fully reclaimed between brands). Stock extraction limited to last 16 weeks. Key optimizations:
+- **Margin targets**: vectorized with NumPy broadcasting (was iterrows — 50-100x speedup)
+- **Training**: `n_jobs=-1` for parallel XGBoost, 2-fold CV (holdout is the real test)
+- **Lift table**: data-driven from actual transactions (falls back to defaults when insufficient data)
+- **Velocity formula**: true price change % (not disc_change approximation)
 - Elasticity: numpy arrays + `np.linalg.lstsq` instead of per-SKU `pd.get_dummies` + sklearn
-- Lifecycle: per-group processing with `np.select` (constant memory, no `iterrows`)
-- Size curve: vectorized for both stock-based and sales-proxy paths
+- Lifecycle: per-group `np.select` + sparse group skip (density < 20% or < 8 weeks)
+- Size curve: reduced groupbys (4→2 per path) + latest-week-only alerts
 - Build context: `.gcloudignore` with root-anchored paths — 1 MiB vs 1 GiB
-- Library versions pinned in `requirements.txt` for reproducible training
 
 | Brand | Pipeline Time |
 |-------|--------------|
 | HOKA | ~2 min |
-| BOLD | ~35 min |
-| BAMERS | ~12 min |
-| OAKLEY | ~4 min |
-| BELSPORT | ~42 min |
+| BOLD | ~20 min |
+| BAMERS | ~8 min |
+| OAKLEY | ~3 min |
+| BELSPORT | ~58 min |
 
 ## Known Issues
 - Elasticity estimates conflated with markdown effects — consider excluding markdown periods
 - Belsport has no stock table yet (`stock_belsport` doesn't exist) — uses sales proxy for size curve
 - `ynk.precios_ofertas` still missing — blocks clean markdown event detection
 - ti.productos costs have mixed currencies (USD/CLP) — using 1000x heuristic for conversion
-- BELSPORT regressor R2=0.442 is weak — 66 heterogeneous stores with no stock data create noise
+- BELSPORT regressor R2 (CV=0.538) improved significantly but holdout (0.704) suggests more room
 - Size curve alerts filtered to latest week only (BELSPORT was generating 3.4M rows across all weeks)
+- Some vendor brand prefix codes are unverified (AL, LT, SH, UM, QS, MN, ML, SC, BL, KP) — may need correction
+- `api/static/` is gitignored — must run `cp -r dashboard/dist api/static` before API deploy
