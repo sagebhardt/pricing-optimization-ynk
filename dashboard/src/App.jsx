@@ -3,6 +3,7 @@ import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Che
 import AnalyticsDrawer from './AnalyticsDrawer'
 import StoreSidebar from './StoreSidebar'
 import ManualPriceModal from './ManualPriceModal'
+import ChainViewModal from './ChainViewModal'
 import './App.css'
 
 const BRANDS = [
@@ -273,7 +274,7 @@ function LandingPage({ onEnter }) {
 
 // ── Action Row ────────────────────────────────────────────────────────────────
 
-function ActionRow({ action, status, onDecide, onManual, canApprove, feedback }) {
+function ActionRow({ action, status, onDecide, onManual, onChainView, canApprove, feedback }) {
   const [open, setOpen] = useState(false)
   const isIncrease = action.action_type === 'increase'
   const tier = action.confidence_tier || ''
@@ -370,6 +371,11 @@ function ActionRow({ action, status, onDecide, onManual, canApprove, feedback })
             {action.margin_delta != null && <div className="dcell"><span className="dcell-label">Delta margen/sem</span><span className={`dcell-val mono ${action.margin_delta >= 0 ? 'margin--ok' : 'margin--danger'}`}>{action.margin_delta >= 0 ? '+' : ''}{clpCompact(action.margin_delta)}</span></div>}
           </div>
           <div className="detail-reason"><AlertTriangle size={13} /> {action.reasons}</div>
+          {onChainView && (
+            <button className="detail-chain-btn" onClick={() => onChainView(action.parent_sku)}>
+              Ver en todas las tiendas
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -521,6 +527,7 @@ function App() {
   const [viewMode, setViewMode] = useState('list')  // 'list' | 'tiendas' | 'marcas'
   const [filterVendor, setFilterVendor] = useState(null)
   const [manualAction, setManualAction] = useState(null)  // action object for ManualPriceModal
+  const [chainSku, setChainSku] = useState(null)          // parent_sku for ChainViewModal
   const [toast, setToast] = useState(null)
   const [filterStatus, setFilterStatus] = useState('all')  // all | pending | approved | rejected
   const [sortBy, setSortBy] = useState('urgency')           // urgency | revenue | confidence | store
@@ -781,6 +788,34 @@ function App() {
         .catch(() => showToast('Error de conexion', 'error'))
     }
   }, [brand, week, authFetch])
+
+  // Chain-wide approve: apply to all/ecomm/bm stores for a parent SKU
+  const handleChainApply = useCallback((chainKey, scope) => {
+    const parentSku = chainKey.split('-chain-')[0]
+    // Optimistically set all matching store keys as approved
+    setDecisions(prev => {
+      const next = { ...prev }
+      actions.forEach(a => {
+        if (a.parent_sku !== parentSku) return
+        const isEc = String(a.store).toUpperCase().startsWith('AB')
+        if (scope === 'ecomm' && !isEc) return
+        if (scope === 'bm' && isEc) return
+        const k = `${a.parent_sku}-${a.store}`
+        if (!next[k]) next[k] = 'approved'
+      })
+      return next
+    })
+    // Send to API with chain_scope
+    if (week) {
+      authFetch('/decisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brand: brand.id, week, key: chainKey, status: 'approved', chain_scope: scope }),
+      }).then(r => { if (!r.ok) showToast('Error aplicando cadena', 'error') })
+        .catch(() => showToast('Error de conexion', 'error'))
+    }
+    setChainSku(null)
+  }, [actions, brand, week, authFetch])
 
   const bulkDecide = useCallback((items, status) => {
     const keys = items.map(a => `${a.parent_sku}-${a.store}`)
@@ -1082,7 +1117,7 @@ function App() {
           <div className="list">
             {increases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} onManual={a => setManualAction(a)} canApprove={canApprove} feedback={feedback[k]} />
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} onManual={a => setManualAction(a)} onChainView={sku => setChainSku(sku)} canApprove={canApprove} feedback={feedback[k]} />
             })}
           </div>
         </section>
@@ -1094,7 +1129,7 @@ function App() {
           <div className="list">
             {decreases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} onManual={a => setManualAction(a)} canApprove={canApprove} feedback={feedback[k]} />
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} onManual={a => setManualAction(a)} onChainView={sku => setChainSku(sku)} canApprove={canApprove} feedback={feedback[k]} />
             })}
           </div>
         </section>
@@ -1144,6 +1179,19 @@ function App() {
 
       </div>{/* main-content */}
       </div>{/* dashboard-body */}
+
+      {chainSku && (
+        <ChainViewModal
+          parentSku={chainSku}
+          actions={actions}
+          decisions={decisions}
+          brand={brand?.id}
+          week={week}
+          authFetch={authFetch}
+          onApplyChain={handleChainApply}
+          onClose={() => setChainSku(null)}
+        />
+      )}
 
       {manualAction && (
         <ManualPriceModal

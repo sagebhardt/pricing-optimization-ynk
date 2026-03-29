@@ -539,3 +539,51 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .mp-btn--confirm { background: var(--blue-500); color: white; border-color: var(--blue-500); }
 .mp-btn--confirm:hover { background: var(--blue-700); }
 .mp-btn--confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Chain View Modal ── */
+.cv-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.cv-modal { background: white; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); width: 900px; max-width: 95vw; max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; }
+.cv-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px; border-bottom: 1px solid var(--slate-200); }
+.cv-header h3 { font-size: 15px; font-weight: 600; color: var(--slate-800); display: flex; align-items: center; gap: 6px; }
+.cv-close { border: none; background: none; cursor: pointer; color: var(--slate-400); padding: 4px; }
+.cv-close:hover { color: var(--slate-700); }
+.cv-product { margin-top: 4px; }
+.cv-sku { font-family: var(--font-mono); font-size: 11px; color: var(--slate-500); margin-right: 8px; }
+.cv-name { font-size: 13px; font-weight: 500; color: var(--slate-700); margin-right: 8px; }
+.cv-cat { font-size: 11px; color: var(--slate-400); }
+
+.cv-summary { display: flex; gap: 16px; padding: 12px 20px; background: var(--slate-50); border-bottom: 1px solid var(--slate-100); }
+.cv-stat { text-align: center; flex: 1; }
+.cv-stat-value { font-family: var(--font-mono); font-size: 16px; font-weight: 600; color: var(--slate-800); }
+.cv-stat-label { font-size: 10px; color: var(--slate-500); text-transform: uppercase; letter-spacing: .5px; }
+
+.cv-table-wrap { overflow-x: auto; flex: 1; }
+.cv-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.cv-table th { text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 600; color: var(--slate-500); text-transform: uppercase; letter-spacing: .5px; border-bottom: 2px solid var(--slate-200); white-space: nowrap; }
+.cv-table td { padding: 6px 10px; border-bottom: 1px solid var(--slate-100); }
+.cv-store { font-weight: 500; color: var(--slate-700); }
+.cv-mono { font-family: var(--font-mono); font-size: 11px; }
+.cv-channel { font-size: 9px; font-weight: 600; padding: 2px 5px; border-radius: 3px; }
+.cv-channel--ecomm { background: var(--blue-100); color: var(--blue-700); }
+.cv-channel--bm { background: var(--slate-100); color: var(--slate-600); }
+.cv-row--approved { background: var(--green-50); }
+.cv-row--rejected { opacity: 0.4; }
+.cv-row--manual { background: var(--blue-50); }
+.cv-status { font-size: 10px; font-weight: 500; display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 3px; }
+.cv-status--approved { background: var(--green-100); color: var(--green-700); }
+.cv-status--rejected { background: var(--red-100); color: var(--red-600); }
+.cv-status--manual { background: var(--blue-100); color: var(--blue-700); }
+.cv-status--pending { background: var(--slate-100); color: var(--slate-500); }
+
+.cv-actions { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--slate-200); background: var(--slate-50); }
+.cv-actions-label { font-size: 12px; font-weight: 500; color: var(--slate-600); }
+.cv-scope-btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 14px; font-size: 12px; font-weight: 500; border: 1px solid var(--green-500); border-radius: var(--radius); background: var(--green-50); color: var(--green-700); cursor: pointer; transition: all .15s; }
+.cv-scope-btn:hover { background: var(--green-500); color: white; }
+.cv-scope-btn--ecomm { border-color: var(--blue-500); background: var(--blue-50); color: var(--blue-700); }
+.cv-scope-btn--ecomm:hover { background: var(--blue-500); color: white; }
+.cv-scope-btn--bm { border-color: var(--slate-400); background: var(--slate-100); color: var(--slate-600); }
+.cv-scope-btn--bm:hover { background: var(--slate-500); color: white; }
+
+/* Chain view link in action detail */
+.detail-chain-btn { margin-top: 8px; border: none; background: none; color: var(--blue-500); font-size: 11px; font-weight: 500; cursor: pointer; padding: 2px 0; }
+.detail-chain-btn:hover { text-decoration: underline; }

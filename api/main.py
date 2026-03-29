@@ -101,6 +101,7 @@ class DecisionPayload(BaseModel):
     status: Optional[str] = None
     manual_price: Optional[int] = None
     estimated_impact: Optional[dict] = None
+    chain_scope: Optional[str] = None  # "all" | "ecomm" | "bm" — chain-wide decision
 
 
 class BulkDecisionPayload(BaseModel):
@@ -492,8 +493,36 @@ def save_decision(payload: DecisionPayload, request: Request):
             record["manual_price"] = payload.manual_price
         if payload.estimated_impact is not None:
             record["estimated_impact"] = payload.estimated_impact
-        data["decisions"][payload.key] = record
-        action = payload.status
+        if payload.chain_scope is not None:
+            record["chain_scope"] = payload.chain_scope
+
+        # Chain-wide: write to individual store keys that match the scope
+        if payload.chain_scope and payload.status:
+            from config.vendor_brands import is_ecomm_store
+            if "-chain-" not in payload.key:
+                raise HTTPException(400, f"Invalid chain key format: {payload.key}")
+            ad = storage.load_pricing_actions(payload.brand)
+            parent_sku = payload.key.rsplit("-chain-", 1)[0]
+            changed = 0
+            for item in ad.get("items", []):
+                if str(item.get("parent_sku")) != parent_sku:
+                    continue
+                store = str(item.get("store"))
+                is_ec = is_ecomm_store(store)
+                if payload.chain_scope == "ecomm" and not is_ec:
+                    continue
+                if payload.chain_scope == "bm" and is_ec:
+                    continue
+                store_key = f"{parent_sku}-{store}"
+                if store_key not in data["decisions"]:  # store-level takes priority
+                    data["decisions"][store_key] = {**record, "chain_key": payload.key}
+                    changed += 1
+            # Also store the chain-level record for reference
+            data["decisions"][payload.key] = record
+            action = f"chain_{payload.status}_{payload.chain_scope}"
+        else:
+            data["decisions"][payload.key] = record
+            action = payload.status
 
     storage.save_decisions(data)
     storage.append_audit({
@@ -628,9 +657,22 @@ def export_price_changes(
     dec_map = dec_data.get("decisions", {})
 
     df["_key"] = df["parent_sku"].astype(str) + "-" + df["store"].astype(str)
+    exportable_statuses = {"approved", "manual", "planner_approved"}
     approved = df[df["_key"].apply(
-        lambda k: dec_map.get(k, {}).get("status") == "approved"
+        lambda k: dec_map.get(k, {}).get("status", "") in exportable_statuses
     )].copy()
+
+    # For manual decisions, override the recommended_price with the manual price
+    for idx, row in approved.iterrows():
+        key = row["_key"]
+        dec = dec_map.get(key, {})
+        if dec.get("manual_price"):
+            approved.at[idx, "recommended_price"] = dec["manual_price"]
+            impact = dec.get("estimated_impact", {})
+            if impact.get("margin_pct") is not None:
+                approved.at[idx, "margin_pct"] = impact["margin_pct"]
+            if impact.get("velocity") is not None:
+                approved.at[idx, "expected_velocity"] = impact["velocity"]
 
     if len(approved) == 0:
         raise HTTPException(400, "No hay acciones aprobadas para exportar")
