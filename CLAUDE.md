@@ -77,7 +77,7 @@ API (Cloud Run, slim image ~50MB):
 
 ## Cloud Infrastructure
 - **Cloud Run Service**: `pricing-api` (1 GiB, 1 CPU, min-instances=0)
-- **Cloud Run Job**: `pricing-pipeline` (32 GiB, 8 CPU, 2hr timeout)
+- **Cloud Run Job**: `pricing-pipeline` (16 GiB, 8 CPU, 2hr timeout)
 - **Cloud Scheduler**: `pricing-pipeline-weekly` (Monday 09:00 UTC / 6am CLT)
 - **GCS Bucket**: `gs://ynk-pricing-decisions`
 - **DB**: PostgreSQL at `190.54.179.91` (public) / `192.168.18.150` (office)
