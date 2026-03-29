@@ -40,10 +40,11 @@ CATEGORICAL_COLS = ["primera_jerarquia", "segunda_jerarquia", "genero", "grupo_e
 # and aggressive subsampling to reduce noise.
 # NOTE: Never put scale_pos_weight here — it's computed from data.
 BRAND_CLS_OVERRIDES = {
-    "BELSPORT": {"n_estimators": 500, "max_depth": 8, "subsample": 0.5, "colsample_bytree": 0.6},
+    "BELSPORT": {"n_estimators": 400, "max_depth": 7, "subsample": 0.5, "colsample_bytree": 0.6},
 }
 BRAND_REG_OVERRIDES = {
-    "BELSPORT": {"n_estimators": 800, "max_depth": 9, "subsample": 0.5, "colsample_bytree": 0.6, "learning_rate": 0.02},
+    # Keep depth/estimators moderate — 800×depth9 on 2.8M rows OOMs at 32 GiB with n_jobs=-1
+    "BELSPORT": {"n_estimators": 500, "max_depth": 7, "subsample": 0.4, "colsample_bytree": 0.5, "learning_rate": 0.02},
 }
 
 # Number of recent weeks to hold out for true out-of-time evaluation
