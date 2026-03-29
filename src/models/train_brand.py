@@ -44,8 +44,8 @@ BRAND_CLS_OVERRIDES = {
     "BELSPORT": {"n_estimators": 400, "max_depth": 7, "subsample": 0.5, "colsample_bytree": 0.6},
 }
 BRAND_REG_OVERRIDES = {
-    # Keep depth/estimators moderate — 800×depth9 on 2.8M rows OOMs at 32 GiB with n_jobs=-1
-    "BELSPORT": {"n_estimators": 500, "max_depth": 7, "subsample": 0.4, "colsample_bytree": 0.5, "learning_rate": 0.02},
+    # LightGBM on 2.8M rows — max_bin=127 + subsample=0.3 keeps peak memory under 16 GiB
+    "BELSPORT": {"n_estimators": 500, "max_depth": 7, "subsample": 0.3, "colsample_bytree": 0.5, "learning_rate": 0.02, "max_bin": 127},
 }
 
 # Number of recent weeks to hold out for true out-of-time evaluation
