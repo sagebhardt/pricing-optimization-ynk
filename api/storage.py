@@ -277,6 +277,34 @@ def _load_elasticity_impl(brand: str) -> dict:
     return summary
 
 
+# ── Outcome results (prediction vs actual) ────────────────────────────────────
+
+def load_outcomes(brand: str):
+    """Load outcome comparison data for a brand."""
+    return _cached(f"outcomes:{brand}", lambda: _load_outcomes_impl(brand), ttl=600)
+
+
+def _load_outcomes_impl(brand: str):
+    import pandas as pd
+
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            blob = bucket.blob(f"outcomes/{brand.lower()}/outcome_results.parquet")
+            if blob.exists():
+                import io
+                return pd.read_parquet(io.BytesIO(blob.download_as_bytes()))
+        except Exception:
+            pass
+
+    # Local fallback
+    fp = _BASE_DIR / "data" / "processed" / brand.lower() / "outcome_results.parquet"
+    try:
+        return pd.read_parquet(fp)
+    except FileNotFoundError:
+        return pd.DataFrame()
+
+
 # ── Decisions ─────────────────────────────────────────────────────────────────
 
 def load_decisions(brand: str, week: str = None) -> dict:

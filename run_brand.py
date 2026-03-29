@@ -26,8 +26,9 @@ from src.features.build_enhanced_brand import build_enhanced_for_brand
 from src.features.aggregate_parent import aggregate_to_parent
 from src.models.train_brand import train_brand_models
 from src.models.weekly_pricing_brand import generate_weekly_actions_for_brand
+from src.features.outcome_brand import compute_outcomes_for_brand
 
-ALL_STEPS = ["extract", "elasticity", "features", "lifecycle", "size_curve", "enhance", "aggregate", "train", "pricing", "sync"]
+ALL_STEPS = ["extract", "elasticity", "features", "lifecycle", "size_curve", "enhance", "aggregate", "train", "pricing", "outcome", "sync"]
 
 PROJECT_ROOT = Path(__file__).parent
 
@@ -88,6 +89,11 @@ def sync_to_gcs(brand: str):
     if feat_path.exists():
         _upload(feat_path, f"data/processed/{brand_lower}/features_parent.parquet")
 
+    # 7. Outcome results (prediction vs actual feedback loop)
+    outcome_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "outcome_results.parquet"
+    if outcome_path.exists():
+        _upload(outcome_path, f"outcomes/{brand_lower}/outcome_results.parquet")
+
     print(f"  Synced {uploaded} files to GCS")
 
 
@@ -116,6 +122,7 @@ def main():
         "aggregate": lambda: aggregate_to_parent(brand),
         "train": lambda: train_brand_models(brand),
         "pricing": lambda: generate_weekly_actions_for_brand(brand, target_week=args.week),
+        "outcome": lambda: compute_outcomes_for_brand(brand),
         "sync": lambda: sync_to_gcs(brand),
     }
 

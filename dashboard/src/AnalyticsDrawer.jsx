@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { BarChart2, TrendingDown, Activity, DollarSign, ChevronDown, ChevronUp } from 'lucide-react'
+import { BarChart2, TrendingDown, Activity, DollarSign, Target, ChevronDown, ChevronUp } from 'lucide-react'
 
 function clpCompact(n) {
   if (n === null || n === undefined || n === '' || isNaN(n)) return '\u2014'
@@ -213,6 +213,68 @@ function SectionImpacto({ data }) {
   )
 }
 
+function SectionPrediccionReal({ data }) {
+  if (!data || !data.available) return null
+  const { decisions_evaluated, median_velocity_error_pct, pct_direction_correct,
+          lift_capture_rate, worst_predictions } = data
+
+  const captureColor = lift_capture_rate >= 70 ? 'var(--green-600)'
+    : lift_capture_rate >= 50 ? 'var(--amber-600)' : 'var(--red-600)'
+  const captureWidth = Math.min(Math.max(lift_capture_rate || 0, 0), 100)
+
+  return (
+    <div className="an-section">
+      <h3 className="an-section-title"><Target size={16} /> Prediccion vs Real</h3>
+      <div className="an-metrics-grid">
+        <div className="an-metric">
+          <div className="an-metric-value" style={{ color: captureColor }}>
+            {lift_capture_rate != null ? `${lift_capture_rate}%` : '\u2014'}
+          </div>
+          <div className="an-metric-label">Lift capturado</div>
+          <div className="an-capture-bar">
+            <div className="an-capture-fill" style={{ width: `${captureWidth}%`, background: captureColor }} />
+          </div>
+        </div>
+        <div className="an-metric">
+          <div className="an-metric-value">
+            {pct_direction_correct != null ? `${pct_direction_correct}%` : '\u2014'}
+          </div>
+          <div className="an-metric-label">Direccion correcta</div>
+        </div>
+        <div className="an-metric">
+          <div className="an-metric-value">
+            {median_velocity_error_pct != null ? `${median_velocity_error_pct > 0 ? '+' : ''}${median_velocity_error_pct}%` : '\u2014'}
+          </div>
+          <div className="an-metric-label">Error mediana vel.</div>
+        </div>
+        <div className="an-metric">
+          <div className="an-metric-value">{decisions_evaluated || 0}</div>
+          <div className="an-metric-label">Decisiones evaluadas</div>
+        </div>
+      </div>
+      {worst_predictions?.length > 0 && (
+        <div className="an-elast-table" style={{ marginTop: '12px' }}>
+          <div className="an-elast-header">
+            <span>SKU</span><span>Pred.</span><span>Real</span><span>Conf.</span>
+          </div>
+          {worst_predictions.map((row, i) => (
+            <div key={i} className="an-elast-row">
+              <span className="an-elast-subcat" title={`${row.parent_sku} @ ${row.store}`}>
+                {row.parent_sku?.slice(0, 10)}
+              </span>
+              <span className="an-elast-count">{row.predicted_velocity?.toFixed(1) ?? '\u2014'}</span>
+              <span className="an-elast-count">{row.actual_velocity?.toFixed(1) ?? '\u2014'}</span>
+              <span className={`an-conf-badge an-conf-${(row.confidence_tier || 'low').toLowerCase()}`}>
+                {row.confidence_tier}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AnalyticsDrawer({ brand, authFetch }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -241,6 +303,7 @@ export default function AnalyticsDrawer({ brand, authFetch }) {
         <SectionElasticidad data={data.elasticidad} />
         <SectionCiclo data={data.ciclo_de_vida} />
         <SectionImpacto data={data.impacto} />
+        <SectionPrediccionReal data={data.prediccion_vs_real} />
       </div>
     </div>
   )

@@ -375,6 +375,120 @@ def get_analytics(brand: str, request: Request):
         "elasticidad": elasticity,
         "ciclo_de_vida": ciclo,
         "impacto": impacto,
+        "prediccion_vs_real": _build_outcome_summary(brand),
+    }
+
+
+def _build_outcome_summary(brand: str) -> dict:
+    """Build prediction-vs-actual summary from outcome results."""
+    from api import storage
+    df = storage.load_outcomes(brand)
+    if df is None or len(df) == 0:
+        return {"available": False}
+
+    valid = df[df["data_quality"] == "normal"].copy()
+    if len(valid) == 0:
+        return {"available": False}
+
+    decisions_evaluated = len(valid)
+    vel_errors = valid["velocity_error_pct"].dropna()
+    median_velocity_error_pct = round(float(vel_errors.median()), 1) if len(vel_errors) > 0 else None
+
+    dir_vals = valid["direction_correct"].dropna()
+    pct_direction_correct = round(float(dir_vals.mean()) * 100, 1) if len(dir_vals) > 0 else None
+
+    # Average actual revenue lift vs baseline
+    lifts = valid["actual_lift_vs_baseline"].dropna()
+    avg_actual_rev_lift = round(float(lifts.mean()), 1) if len(lifts) > 0 else None
+
+    # Lift capture rate: how much of predicted lift was actually realized
+    both = valid.dropna(subset=["actual_lift_vs_baseline", "predicted_lift_vs_baseline"])
+    both = both[both["predicted_lift_vs_baseline"].abs() > 0.1]  # avoid divide-by-near-zero
+    if len(both) > 0:
+        capture = (both["actual_lift_vs_baseline"] / both["predicted_lift_vs_baseline"]).clip(-5, 5)
+        lift_capture_rate = round(float(capture.median()) * 100, 1)
+    else:
+        lift_capture_rate = None
+
+    # Breakdown by confidence tier
+    by_confidence = {}
+    for tier, group in valid.groupby("confidence_tier"):
+        tier_errs = group["velocity_error_pct"].dropna()
+        tier_dirs = group["direction_correct"].dropna()
+        by_confidence[str(tier)] = {
+            "count": len(group),
+            "median_velocity_error_pct": round(float(tier_errs.median()), 1) if len(tier_errs) > 0 else None,
+            "pct_direction_correct": round(float(tier_dirs.mean()) * 100, 1) if len(tier_dirs) > 0 else None,
+        }
+
+    # Breakdown by action type
+    by_action_type = {}
+    for at, group in valid.groupby("action_type"):
+        at_errs = group["velocity_error_pct"].dropna()
+        at_dirs = group["direction_correct"].dropna()
+        by_action_type[str(at)] = {
+            "count": len(group),
+            "median_velocity_error_pct": round(float(at_errs.median()), 1) if len(at_errs) > 0 else None,
+            "pct_direction_correct": round(float(at_dirs.mean()) * 100, 1) if len(at_dirs) > 0 else None,
+        }
+
+    # Worst mis-predictions (for drill-down table)
+    worst_candidates = valid.dropna(subset=["velocity_error_pct"]).copy()
+    worst_candidates["_abs_err"] = worst_candidates["velocity_error_pct"].abs()
+    worst = worst_candidates.nlargest(5, "_abs_err", keep="first")
+    worst_items = []
+    for _, row in worst.iterrows():
+        worst_items.append({
+            "parent_sku": row["parent_sku"],
+            "store": row["store"],
+            "predicted_velocity": row.get("predicted_velocity"),
+            "actual_velocity": row.get("actual_velocity"),
+            "velocity_error_pct": row.get("velocity_error_pct"),
+            "confidence_tier": row.get("confidence_tier"),
+            "decision_week": row.get("decision_week"),
+        })
+
+    return {
+        "available": True,
+        "decisions_evaluated": decisions_evaluated,
+        "weeks_evaluated": int(valid["decision_week"].nunique()),
+        "median_velocity_error_pct": median_velocity_error_pct,
+        "pct_direction_correct": pct_direction_correct,
+        "avg_actual_rev_lift": avg_actual_rev_lift,
+        "lift_capture_rate": lift_capture_rate,
+        "by_confidence": by_confidence,
+        "by_action_type": by_action_type,
+        "worst_predictions": worst_items,
+    }
+
+
+@app.get("/analytics/outcomes/{brand}")
+def get_outcome_details(brand: str, request: Request):
+    """Per-decision drill-down for prediction vs actual outcomes."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+
+    df = storage.load_outcomes(brand)
+    if df is None or len(df) == 0:
+        return {"available": False, "items": []}
+
+    # Return all rows, sorted by absolute velocity error (worst first)
+    valid = df[df["data_quality"] == "normal"].copy()
+    valid["_abs_err"] = valid["velocity_error_pct"].abs()
+    valid = valid.sort_values("_abs_err", ascending=False).drop(columns=["_abs_err"])
+
+    items = valid.head(200).to_dict(orient="records")
+    # Clean NaN for JSON serialization
+    for item in items:
+        for k, v in item.items():
+            if isinstance(v, float) and (v != v):  # NaN check
+                item[k] = None
+
+    return {
+        "available": True,
+        "total": len(valid),
+        "items": items,
     }
 
 
