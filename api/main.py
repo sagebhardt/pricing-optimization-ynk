@@ -57,7 +57,7 @@ async def auth_middleware(request: Request, call_next):
     # Non-API routes — serve SPA (frontend handles login)
     api_prefixes = ("/pricing", "/decisions", "/export", "/alerts", "/model",
                     "/recommendations", "/sku/", "/audit", "/auth/me", "/admin", "/feedback",
-                    "/analytics")
+                    "/analytics", "/estimate-impact")
     if not any(path.startswith(p) for p in api_prefixes):
         return await call_next(request)
 
@@ -99,6 +99,8 @@ class DecisionPayload(BaseModel):
     week: str
     key: str
     status: Optional[str] = None
+    manual_price: Optional[int] = None
+    estimated_impact: Optional[dict] = None
 
 
 class BulkDecisionPayload(BaseModel):
@@ -106,6 +108,13 @@ class BulkDecisionPayload(BaseModel):
     week: str
     keys: list[str]
     status: str
+
+
+class ImpactEstimatePayload(BaseModel):
+    brand: str
+    parent_sku: str
+    store: str
+    manual_price: int
 
 
 class FeedbackPayload(BaseModel):
@@ -416,6 +425,38 @@ def admin_set_domains(request: Request, domains: list[str]):
     return {"ok": True}
 
 
+# ── Manual Price Impact Estimation ────────────────────────────────────────────
+
+@app.post("/estimate-impact")
+def estimate_impact(payload: ImpactEstimatePayload, request: Request):
+    """Recalculate expected velocity/revenue/margin for a manually-set price."""
+    from api import storage
+    from api.pricing_math import estimate_manual_price_impact
+    user = _get_user(request)
+    _check_brand_access(user, payload.brand)
+
+    # Find the action row
+    actions_data = storage.load_pricing_actions(payload.brand)
+    action = None
+    for item in actions_data.get("items", []):
+        if item.get("parent_sku") == payload.parent_sku and str(item.get("store")) == str(payload.store):
+            action = item
+            break
+
+    if not action:
+        raise HTTPException(404, f"Action not found: {payload.parent_sku} in store {payload.store}")
+
+    # Load elasticity for this SKU if available
+    elasticity = None
+    elast_data = storage.load_elasticity_summary(payload.brand)
+    # The summary doesn't have per-SKU elasticity, but we can use the action's
+    # implied data. For a more precise estimate, we'd need the full parquet.
+    # For now, use the pricing_math function which handles the fallback.
+
+    result = estimate_manual_price_impact(action, payload.manual_price, elasticity)
+    return result
+
+
 # ── Decisions (storage-backed) ────────────────────────────────────────────────
 
 @app.get("/decisions")
@@ -442,11 +483,16 @@ def save_decision(payload: DecisionPayload, request: Request):
         data["decisions"].pop(payload.key, None)
         action = "undo"
     else:
-        data["decisions"][payload.key] = {
+        record = {
             "status": payload.status,
             "timestamp": datetime.now().isoformat(),
             "user": user["email"],
         }
+        if payload.manual_price is not None:
+            record["manual_price"] = payload.manual_price
+        if payload.estimated_impact is not None:
+            record["estimated_impact"] = payload.estimated_impact
+        data["decisions"][payload.key] = record
         action = payload.status
 
     storage.save_decisions(data)

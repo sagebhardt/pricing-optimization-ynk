@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2, Store, Tag } from 'lucide-react'
+import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2, Store, Tag, DollarSign } from 'lucide-react'
 import AnalyticsDrawer from './AnalyticsDrawer'
 import StoreSidebar from './StoreSidebar'
+import ManualPriceModal from './ManualPriceModal'
 import './App.css'
 
 const BRANDS = [
@@ -272,7 +273,7 @@ function LandingPage({ onEnter }) {
 
 // ── Action Row ────────────────────────────────────────────────────────────────
 
-function ActionRow({ action, status, onDecide, canApprove, feedback }) {
+function ActionRow({ action, status, onDecide, onManual, canApprove, feedback }) {
   const [open, setOpen] = useState(false)
   const isIncrease = action.action_type === 'increase'
   const tier = action.confidence_tier || ''
@@ -334,7 +335,15 @@ function ActionRow({ action, status, onDecide, canApprove, feedback }) {
                 <button className="btn-reject" onClick={() => onDecide('rejected')} title="Rechazar">
                   <X size={14} />
                 </button>
+                <button className="btn-manual" onClick={() => onManual(action)} title="Precio manual">
+                  <DollarSign size={14} />
+                </button>
               </>
+            ) : status === 'manual' ? (
+              <button className="btn-decided btn-decided--manual" onClick={() => onDecide(null)} title="Deshacer">
+                <DollarSign size={12} />
+                <span>Manual</span>
+              </button>
             ) : (
               <button className={`btn-decided btn-decided--${status}`} onClick={() => onDecide(null)} title="Deshacer">
                 {status === 'approved' ? <Check size={12} /> : <X size={12} />}
@@ -511,6 +520,7 @@ function App() {
   const [showAnalytics, setShowAnalytics] = useState(false)
   const [viewMode, setViewMode] = useState('list')  // 'list' | 'tiendas' | 'marcas'
   const [filterVendor, setFilterVendor] = useState(null)
+  const [manualAction, setManualAction] = useState(null)  // action object for ManualPriceModal
   const [toast, setToast] = useState(null)
   const [filterStatus, setFilterStatus] = useState('all')  // all | pending | approved | rejected
   const [sortBy, setSortBy] = useState('urgency')           // urgency | revenue | confidence | store
@@ -752,6 +762,26 @@ function App() {
     }
   }, [brand, week, authFetch])
 
+  // Manual price confirm: store "manual" status locally, send manual_price + impact to API
+  const handleManualConfirm = useCallback((action, snappedPrice, impact) => {
+    const key = `${action.parent_sku}-${action.store}`
+    setDecisions(prev => ({ ...prev, [key]: 'manual' }))
+    setManualAction(null)
+    if (week) {
+      authFetch('/decisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brand: brand.id, week, key,
+          status: 'manual',
+          manual_price: snappedPrice,
+          estimated_impact: impact,
+        }),
+      }).then(r => { if (!r.ok) showToast('Error guardando precio manual', 'error') })
+        .catch(() => showToast('Error de conexion', 'error'))
+    }
+  }, [brand, week, authFetch])
+
   const bulkDecide = useCallback((items, status) => {
     const keys = items.map(a => `${a.parent_sku}-${a.store}`)
     setDecisions(prev => {
@@ -980,6 +1010,7 @@ function App() {
             <option value="pending">Sin revisar</option>
             <option value="approved">Aprobadas</option>
             <option value="rejected">Rechazadas</option>
+            <option value="manual">Precio manual</option>
           </select>
           <select value={filterStore} onChange={e => { setFilterStore(e.target.value); setPage(1) }}>
             <option value="all">Todas las tiendas</option>
@@ -1051,7 +1082,7 @@ function App() {
           <div className="list">
             {increases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} canApprove={canApprove} feedback={feedback[k]} />
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} onManual={a => setManualAction(a)} canApprove={canApprove} feedback={feedback[k]} />
             })}
           </div>
         </section>
@@ -1063,7 +1094,7 @@ function App() {
           <div className="list">
             {decreases.map(a => {
               const k = `${a.parent_sku}-${a.store}`
-              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} canApprove={canApprove} feedback={feedback[k]} />
+              return <ActionRow key={k} action={a} status={decisions[k] || null} onDecide={st => setDecision(k, st)} onManual={a => setManualAction(a)} canApprove={canApprove} feedback={feedback[k]} />
             })}
           </div>
         </section>
@@ -1113,6 +1144,16 @@ function App() {
 
       </div>{/* main-content */}
       </div>{/* dashboard-body */}
+
+      {manualAction && (
+        <ManualPriceModal
+          action={manualAction}
+          brand={brand?.id}
+          authFetch={authFetch}
+          onConfirm={(price, impact) => handleManualConfirm(manualAction, price, impact)}
+          onClose={() => setManualAction(null)}
+        />
+      )}
 
       {showAdmin && <AdminPanel authFetch={authFetch} onClose={() => setShowAdmin(false)} />}
 

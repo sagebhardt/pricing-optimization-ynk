@@ -97,6 +97,7 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .row { background: #fff; border: 1px solid var(--slate-200); border-radius: var(--radius); overflow: hidden; transition: opacity .15s, background .15s; }
 .row--approved { background: var(--green-50); border-color: #bbf7d0; opacity: .75; }
 .row--rejected { opacity: .35; }
+.row--manual { background: var(--blue-50); border-color: #bfdbfe; opacity: .75; }
 
 .row-main {
   display: grid;
@@ -487,3 +488,54 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 
 .sb-approve-btn { display: block; width: 100%; margin-top: 4px; padding: 3px 8px; font-size: 10px; font-weight: 600; border: 1px solid var(--green-500); border-radius: 3px; background: var(--green-50); color: var(--green-700); cursor: pointer; transition: all .15s; }
 .sb-approve-btn:hover { background: var(--green-500); color: white; }
+
+/* ── Manual Price Button ── */
+.btn-manual { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--blue-500); background: var(--blue-50); color: var(--blue-700); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+.btn-manual:hover { background: var(--blue-500); color: white; }
+.btn-decided--manual { background: var(--blue-50); border: 1px solid var(--blue-500); color: var(--blue-700); }
+
+/* ── Manual Price Modal ── */
+.mp-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.mp-modal { background: white; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); width: 420px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+.mp-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px 12px; border-bottom: 1px solid var(--slate-200); }
+.mp-header h3 { font-size: 15px; font-weight: 600; color: var(--slate-800); }
+.mp-close { border: none; background: none; cursor: pointer; color: var(--slate-400); padding: 4px; border-radius: 4px; }
+.mp-close:hover { background: var(--slate-100); color: var(--slate-700); }
+
+.mp-product { padding: 12px 20px; background: var(--slate-50); }
+.mp-sku { font-family: var(--font-mono); font-size: 11px; color: var(--slate-500); display: block; }
+.mp-name { font-size: 13px; font-weight: 500; color: var(--slate-800); display: block; margin: 2px 0; }
+.mp-store { font-size: 11px; color: var(--slate-500); }
+
+.mp-current { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--slate-100); }
+.mp-current-item { text-align: center; }
+.mp-current-label { font-size: 10px; color: var(--slate-400); text-transform: uppercase; letter-spacing: .5px; display: block; }
+.mp-current-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--slate-700); }
+
+.mp-input-section { padding: 16px 20px 8px; }
+.mp-input-label { font-size: 12px; font-weight: 500; color: var(--slate-600); display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.mp-input { width: 100%; padding: 10px 14px; font-family: var(--font-mono); font-size: 18px; font-weight: 600; border: 2px solid var(--slate-200); border-radius: var(--radius); outline: none; transition: border .15s; }
+.mp-input:focus { border-color: var(--blue-500); }
+.mp-snap-hint { font-size: 11px; color: var(--blue-500); margin-top: 4px; }
+
+.mp-loading { padding: 12px 20px; color: var(--slate-500); font-size: 12px; }
+.mp-error { padding: 12px 20px; color: var(--red-600); font-size: 12px; }
+
+.mp-impact { padding: 8px 20px 16px; }
+.mp-impact-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--slate-100); font-size: 13px; }
+.mp-impact-row span:first-child { color: var(--slate-600); }
+.mp-impact-value { font-family: var(--font-mono); font-weight: 600; color: var(--slate-800); }
+
+.mp-warning { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 4px; font-size: 11px; font-weight: 500; margin-top: 8px; }
+.mp-warning--below_cost { background: var(--red-50); color: var(--red-600); }
+.mp-warning--below_margin_floor { background: var(--red-50); color: var(--red-600); }
+.mp-warning--thin_margin { background: var(--amber-50); color: var(--amber-600); }
+.mp-warning--no_cost_data { background: var(--slate-100); color: var(--slate-500); }
+
+.mp-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 20px 16px; }
+.mp-btn { padding: 8px 16px; font-size: 13px; font-weight: 500; border-radius: var(--radius); cursor: pointer; border: 1px solid var(--slate-200); transition: all .15s; display: flex; align-items: center; gap: 5px; }
+.mp-btn--cancel { background: white; color: var(--slate-600); }
+.mp-btn--cancel:hover { background: var(--slate-50); }
+.mp-btn--confirm { background: var(--blue-500); color: white; border-color: var(--blue-500); }
+.mp-btn--confirm:hover { background: var(--blue-700); }
+.mp-btn--confirm:disabled { opacity: 0.5; cursor: not-allowed; }
