@@ -813,7 +813,7 @@ def build_manual():
         "y sus implicaciones comerciales."
     ))
     story.append(sp(4))
-    story.append(h2("7.1 Panorama General"))
+    story.append(h2("6.1 Panorama General"))
     story.append(make_table([
         ['Marca', 'SKUs\nanalizados', 'Mediana', 'Elásticos\n(< -1)', 'Unitarios\n(-1 a -0.5)', 'Inelásticos\n(> -0.5)'],
         ['HOKA', '345', '-0.12', '31 (9%)', '48 (14%)', '266 (77%)'],
@@ -831,7 +831,7 @@ def build_manual():
     ))
     story.append(sp(8))
 
-    story.append(h2("7.2 HOKA"))
+    story.append(h2("6.2 HOKA"))
     story.append(p(
         "Con solo 3 tiendas y una marca premium, HOKA muestra elasticidad mediana de <b>-0.12</b> — "
         "casi completamente inelástica. El 77% de los productos no responde significativamente al precio."
@@ -842,7 +842,7 @@ def build_manual():
     story.append(bullet("<b>Markdowns solo por curva de tallas rota o fin de temporada:</b> cuando ya no hay tallas clave, el descuento ayuda a liquidar."))
     story.append(bullet("<b>Subidas de precio viables:</b> productos con alta velocidad pueden tolerar precios mayores sin perder ventas."))
 
-    story.append(h2("7.3 BOLD"))
+    story.append(h2("6.3 BOLD"))
     story.append(p(
         "BOLD es el caso más complejo: 35 tiendas, múltiples marcas vendor (Nike, Adidas, Puma, etc.), "
         "y 6,915 SKUs analizados. Elasticidad mediana de <b>-0.09</b>, altamente inelástico."
@@ -863,7 +863,7 @@ def build_manual():
     story.append(bullet("<b>Mochilas (BACKPACK):</b> -0.36 — responden bien a promociones."))
     story.append(bullet("<b>Running:</b> -0.04 — muy inelástico. Descuentos destruyen margen sin generar volumen."))
 
-    story.append(h2("7.4 BAMERS"))
+    story.append(h2("6.4 BAMERS"))
     story.append(p(
         "BAMERS muestra la elasticidad mediana más alta del grupo: <b>-0.29</b>. Con mayor proporción "
         "de confianza alta (28%), sus estimaciones son las más robustas."
@@ -880,7 +880,7 @@ def build_manual():
         "El sistema puede ser más agresivo aquí que en otras marcas, especialmente en Botas y Mochilas."
     ))
 
-    story.append(h2("7.5 OAKLEY"))
+    story.append(h2("6.5 OAKLEY"))
     story.append(p(
         "Elasticidad mediana de <b>-0.08</b>, similar a BOLD. El 80% de los productos son inelásticos. "
         "Las categorías de apparel (Top, Bottom) dominan el portafolio."
@@ -891,7 +891,7 @@ def build_manual():
     story.append(bullet("<b>Jockey/Gorros:</b> +0.32 — elasticidad positiva sugiere que el precio no es factor (o datos insuficientes)."))
 
     story.append(sp(8))
-    story.append(h2("7.6 Implicaciones Estratégicas"))
+    story.append(h2("6.6 Implicaciones Estratégicas"))
     story.append(sp(4))
     story.append(bullet("<b>Proteger margen es la prioridad #1:</b> con elasticidades tan bajas, cada punto de descuento innecesario es margen perdido sin compensación en volumen."))
     story.append(bullet("<b>Descuentos quirúrgicos, no masivos:</b> concentrar markdowns en productos con señales claras (curva de tallas rota, fin de temporada, sobrestock)."))
