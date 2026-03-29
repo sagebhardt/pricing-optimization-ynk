@@ -193,6 +193,83 @@ def get_model_info(brand: Optional[str] = Query(None)):
     }
 
 
+@app.get("/analytics/overview")
+def get_analytics_overview(request: Request):
+    """Cross-brand overview: summary metrics for all accessible brands."""
+    from api import storage
+    user = _get_user(request)
+    user_brands = user.get("brands")
+
+    all_brands = ["hoka", "bold", "bamers", "oakley", "belsport"]
+    if user_brands:
+        all_brands = [b for b in all_brands if b in user_brands]
+
+    brands = []
+    for bid in all_brands:
+        ad = storage.load_pricing_actions(bid)
+        items = ad.get("items", [])
+        meta = storage.load_model_info(bid)
+        week = ad.get("week")
+
+        dec_data = storage.load_decisions(bid, week) if week else {"decisions": {}}
+        dec_map = dec_data.get("decisions", {})
+
+        total = len(items)
+        decided = 0
+        approved = 0
+        for item in items:
+            key = f"{item.get('parent_sku')}-{item.get('store')}"
+            dec = dec_map.get(key, {})
+            status = dec.get("status", "") if isinstance(dec, dict) else (dec or "")
+            if status:
+                decided += 1
+                if status in ("approved", "bm_approved", "manual", "bm_manual", "planner_approved"):
+                    approved += 1
+
+        total_rev_delta = 0
+        total_margin_delta = 0
+        thin_margin = 0
+        increases = 0
+        for item in items:
+            try:
+                total_rev_delta += int(item.get("rev_delta", 0) or 0)
+                total_margin_delta += int(item.get("margin_delta", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+            try:
+                mp = item.get("margin_pct")
+                if mp and mp != "" and float(mp) < 20:
+                    thin_margin += 1
+            except (ValueError, TypeError):
+                pass
+            if item.get("action_type") == "increase":
+                increases += 1
+
+        cls = meta.get("classifier", {})
+        reg = meta.get("regressor", {})
+        holdout = reg.get("holdout") or {}
+
+        brands.append({
+            "brand": bid,
+            "week": week,
+            "total_actions": total,
+            "decided": decided,
+            "approved": approved,
+            "pending": total - decided,
+            "increases": increases,
+            "decreases": total - increases,
+            "rev_delta": total_rev_delta,
+            "margin_delta": total_margin_delta,
+            "thin_margin_count": thin_margin,
+            "classifier_auc": cls.get("avg_auc"),
+            "regressor_r2": reg.get("avg_r2"),
+            "holdout_r2": holdout.get("r2"),
+            "n_samples": reg.get("n_samples"),
+        })
+
+    return {"brands": brands}
+
+
 @app.get("/analytics/{brand}")
 def get_analytics(brand: str, request: Request):
     """Get analytics panel data for a brand: model health, elasticity, lifecycle, impact."""

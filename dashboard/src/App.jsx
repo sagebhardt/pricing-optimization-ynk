@@ -5,6 +5,7 @@ import StoreSidebar from './StoreSidebar'
 import ManualPriceModal from './ManualPriceModal'
 import ChainViewModal from './ChainViewModal'
 import PlannerQueue from './PlannerQueue'
+import OverviewDashboard from './OverviewDashboard'
 import './App.css'
 
 const BRANDS = [
@@ -918,7 +919,16 @@ function App() {
 
   // ── Render ──
 
-  if (view === 'landing') return <LandingPage onEnter={handleEnter} />
+  if (view === 'landing') return (
+    <OverviewDashboard
+      authFetch={authFetch}
+      user={user}
+      onSelectBrand={(brandId) => {
+        const b = BRANDS.find(x => x.id === brandId)
+        if (b) { setView('dashboard'); loadBrand(b) }
+      }}
+    />
+  )
 
   if (loading) return <div className="loading-screen"><div className="spinner" /><span>Cargando {brand.label}...</span></div>
   if (error) return <div className="error-screen"><AlertTriangle size={24} /><p>{error}</p><p className="error-hint">python3 -m uvicorn api.main:app --port 8080</p></div>
