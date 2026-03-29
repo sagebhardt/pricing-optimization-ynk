@@ -853,6 +853,40 @@ def build_manual():
         "Esto es donde el <b>criterio humano complementa al modelo</b>."
     ))
 
+    story.append(sp(8))
+    story.append(h2("5.1 Estimación de Impacto en Margen Bruto"))
+    story.append(p(
+        "Basándose en las recomendaciones generadas por el sistema para una semana típica, "
+        "se estima el siguiente impacto potencial en margen bruto incremental para los 9 meses "
+        "restantes de 2026 (Abril-Diciembre, 39 semanas):"
+    ))
+    story.append(sp(4))
+    story.append(make_table([
+        ['Escenario', 'Adopción', 'Captura\nde lift', 'Margen incremental\n(9 meses)', '~USD'],
+        ['Conservador', '30%', '30%', '$884M CLP', '~$930K'],
+        ['Caso base', '50%', '50%', '$2.500M CLP', '~$2.6M'],
+        ['Optimista', '70%', '65%', '$4.500M CLP', '~$4.7M'],
+    ], col_widths=[1.2*inch, 0.9*inch, 0.8*inch, 1.8*inch, 1.8*inch]))
+    story.append(sp(4))
+    story.append(p("<b>Definiciones:</b>"))
+    story.append(bullet("<b>Adopción:</b> qué porcentaje de las recomendaciones se implementan realmente en tiendas."))
+    story.append(bullet("<b>Captura de lift:</b> qué fracción de la mejora predicha se materializa en ventas reales."))
+    story.append(sp(4))
+    story.append(note(
+        "Estas estimaciones son preliminares. El número real depende de la adopción del equipo "
+        "comercial y de la precisión del modelo, ambos factores que el feedback loop (sección 4.9) "
+        "medirá semana a semana. Después de 4-8 semanas de uso activo, podremos reemplazar estos "
+        "rangos con cifras basadas en resultados reales."
+    ))
+    story.append(sp(4))
+    story.append(callout_box(
+        "Potencial máximo teórico",
+        "El sistema genera ~$252M CLP/semana en oportunidades de margen identificadas (todas las marcas). "
+        "Esto equivale a ~$9.800M CLP/año si se implementara el 100% con precisión perfecta. "
+        "Los escenarios de arriba aplican descuentos realistas por adopción parcial y "
+        "precisión imperfecta del modelo."
+    ))
+
     # ════════════════════════════════════════════════════════════════════════
     # 6. ELASTICITIES — WHAT THEY MEAN FOR THE BUSINESS
     # ════════════════════════════════════════════════════════════════════════
