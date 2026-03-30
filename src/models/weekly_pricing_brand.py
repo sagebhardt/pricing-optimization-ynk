@@ -269,6 +269,20 @@ def classify_urgency(row):
         reasons.append("Discounted in other channels")
         urgency_score += 1
 
+    # Competitor pricing (only adds urgency when our velocity is already weak)
+    comp_undercut = row.get("comp_undercut", 0)
+    velocity = row.get("velocity_4w", 0)
+    if comp_undercut and pd.notna(comp_undercut) and comp_undercut > 0:
+        comp_gap = row.get("comp_price_gap_pct")
+        gap_str = f"{comp_gap:+.0f}%" if pd.notna(comp_gap) else ""
+        if velocity < 0.5 or vel_trend < 0.7:
+            # Losing sales AND competitor is cheaper → real pressure
+            reasons.append(f"Competitor cheaper {gap_str} + velocity weak")
+            urgency_score += 2
+        else:
+            # Competitor cheaper but we're selling fine → informational only, no urgency
+            reasons.append(f"Competitor cheaper {gap_str} — velocity healthy, hold price")
+
     # Model confidence
     prob = row.get("markdown_probability", 0)
     if prob > 0.9:

@@ -28,13 +28,15 @@ function Bar({ value, max, color = 'var(--blue-500)', label, sublabel }) {
 function SectionModelo({ data }) {
   if (!data) return null
   const { classifier_auc, regressor_r2, regressor_mae_pp, n_samples, n_features,
-          holdout_auc, holdout_r2, training_mode, classifier_shap, regressor_shap } = data
+          holdout_auc, holdout_r2, holdout_mae_pp, holdout_n_samples,
+          training_mode, classifier_shap, regressor_shap } = data
 
   const maxShap = classifier_shap?.[0]?.mean_abs_shap || 1
 
   return (
     <div className="an-section">
       <h3 className="an-section-title"><BarChart2 size={16} /> Modelo</h3>
+      <div className="an-metrics-sublabel">Cross-Validation</div>
       <div className="an-metrics-grid">
         <div className="an-metric">
           <div className="an-metric-value">{classifier_auc?.toFixed(3) || '\u2014'}</div>
@@ -42,7 +44,7 @@ function SectionModelo({ data }) {
         </div>
         <div className="an-metric">
           <div className="an-metric-value">{regressor_r2?.toFixed(3) || '\u2014'}</div>
-          <div className="an-metric-label">Regressor R2</div>
+          <div className="an-metric-label">Regressor R\u00b2</div>
         </div>
         <div className="an-metric">
           <div className="an-metric-value">{regressor_mae_pp ? `${regressor_mae_pp}pp` : '\u2014'}</div>
@@ -53,10 +55,28 @@ function SectionModelo({ data }) {
           <div className="an-metric-label">Muestras</div>
         </div>
       </div>
-      {holdout_auc && (
-        <div className="an-holdout">
-          Holdout: AUC {holdout_auc.toFixed(3)} | R2 {holdout_r2?.toFixed(3) || '\u2014'}
-        </div>
+      {(holdout_auc || holdout_r2) && (
+        <>
+          <div className="an-metrics-sublabel">Holdout (\u00faltimas 4 semanas)</div>
+          <div className="an-metrics-grid">
+            <div className="an-metric">
+              <div className="an-metric-value">{holdout_auc?.toFixed(3) || '\u2014'}</div>
+              <div className="an-metric-label">Classifier AUC</div>
+            </div>
+            <div className="an-metric">
+              <div className="an-metric-value">{holdout_r2?.toFixed(3) || '\u2014'}</div>
+              <div className="an-metric-label">Regressor R\u00b2</div>
+            </div>
+            <div className="an-metric">
+              <div className="an-metric-value">{holdout_mae_pp ? `${holdout_mae_pp}pp` : '\u2014'}</div>
+              <div className="an-metric-label">MAE</div>
+            </div>
+            <div className="an-metric">
+              <div className="an-metric-value">{holdout_n_samples?.toLocaleString() || '\u2014'}</div>
+              <div className="an-metric-label">Muestras</div>
+            </div>
+          </div>
+        </>
       )}
       {classifier_shap?.length > 0 && (
         <div className="an-shap">
@@ -275,6 +295,57 @@ function SectionPrediccionReal({ data }) {
   )
 }
 
+function SectionCompetencia({ data }) {
+  if (!data || !data.coverage?.total_parents) return null
+  const { coverage, items, scraped_at } = data
+  const byComp = coverage.by_competitor || {}
+  const maxCount = Math.max(...Object.values(byComp), 1)
+
+  return (
+    <div className="an-section">
+      <h3 className="an-section-title"><DollarSign size={16} /> Competencia</h3>
+      <div className="an-metrics-grid">
+        <div className="an-metric">
+          <div className="an-metric-value">{coverage.total_parents}</div>
+          <div className="an-metric-label">SKUs rastreados</div>
+        </div>
+        <div className="an-metric">
+          <div className="an-metric-value">{Object.keys(byComp).length}</div>
+          <div className="an-metric-label">Competidores</div>
+        </div>
+      </div>
+      {Object.keys(byComp).length > 0 && (
+        <div className="an-shap">
+          <div className="an-shap-title">Cobertura por competidor</div>
+          {Object.entries(byComp).sort((a, b) => b[1] - a[1]).map(([name, count]) => (
+            <Bar key={name} value={count} max={maxCount}
+                 color="var(--amber-500)" label={name} sublabel={`${count} SKUs`} />
+          ))}
+        </div>
+      )}
+      {items?.length > 0 && (
+        <div className="an-elast-table" style={{ marginTop: '8px' }}>
+          <div className="an-shap-title">Mayores brechas de precio</div>
+          <div className="an-elast-header">
+            <span>SKU</span><span>Nuestro</span><span>Min Comp.</span><span>Gap</span>
+          </div>
+          {items.slice(0, 8).map((item, i) => {
+            const ourMin = item.competitors?.reduce((m, c) => Math.min(m, c.price), Infinity)
+            return (
+              <div key={i} className="an-elast-row">
+                <span className="an-elast-sku">{item.parent_sku?.slice(-8)}</span>
+                <span>{'\u2014'}</span>
+                <span>${ourMin?.toLocaleString()}</span>
+                <span>{item.competitors?.length} sites</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AnalyticsDrawer({ brand, authFetch }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -303,6 +374,7 @@ export default function AnalyticsDrawer({ brand, authFetch }) {
         <SectionElasticidad data={data.elasticidad} />
         <SectionCiclo data={data.ciclo_de_vida} />
         <SectionImpacto data={data.impacto} />
+        <SectionCompetencia data={data.competencia} />
         <SectionPrediccionReal data={data.prediccion_vs_real} />
       </div>
     </div>

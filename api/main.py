@@ -168,6 +168,55 @@ def get_size_alerts(brand: Optional[str] = Query(None), min_attrition: float = Q
     }
 
 
+@app.get("/alerts/cross-store")
+def get_cross_store_alerts(brand: Optional[str] = Query(None), min_price_spread: float = Query(0.0)):
+    """Get cross-store pricing consistency alerts."""
+    from api import storage
+    alerts = storage.load_cross_store_alerts(brand)
+    if len(alerts) == 0:
+        return {"week": None, "total_alerts": 0, "items": []}
+
+    latest = alerts[alerts["week"] == alerts["week"].max()]
+    if min_price_spread > 0:
+        latest = latest[latest["price_spread"] >= min_price_spread]
+
+    # Group by parent SKU with nested stores
+    items = []
+    for parent, group in latest.groupby("codigo_padre"):
+        first = group.iloc[0]
+        stores = []
+        for _, row in group.iterrows():
+            store = {
+                "store": row["centro"],
+                "channel": row.get("channel", "bm"),
+                "price": int(row["avg_precio_final"]) if pd.notna(row.get("avg_precio_final")) else None,
+                "discount_rate": round(row["discount_rate"], 3) if pd.notna(row.get("discount_rate")) else None,
+            }
+            if "stock_on_hand" in row.index and pd.notna(row.get("stock_on_hand")):
+                store["stock_on_hand"] = int(row["stock_on_hand"])
+            if "velocity_4w" in row.index and pd.notna(row.get("velocity_4w")):
+                store["velocity_4w"] = round(row["velocity_4w"], 1)
+            stores.append(store)
+
+        items.append({
+            "parent_sku": parent,
+            "brand": first.get("brand", ""),
+            "n_stores": int(first["n_stores"]),
+            "price_spread": round(first["price_spread"], 3),
+            "discount_spread": round(first["discount_spread"], 3),
+            "sync_price": int(first["sync_price"]) if pd.notna(first.get("sync_price")) else None,
+            "alert_reasons": first.get("alert_reasons", ""),
+            "stores": stores,
+        })
+
+    items.sort(key=lambda x: -x["price_spread"])
+    return {
+        "week": str(latest["week"].max().date()) if len(latest) > 0 else None,
+        "total_alerts": len(items),
+        "items": items[:50],
+    }
+
+
 @app.get("/model/info")
 def get_model_info(brand: Optional[str] = Query(None)):
     """Get model metadata and performance metrics per brand."""
@@ -300,6 +349,8 @@ def get_analytics(brand: str, request: Request):
         "n_features": cls.get("n_features"),
         "holdout_auc": cls_holdout.get("auc"),
         "holdout_r2": reg_holdout.get("r2"),
+        "holdout_mae_pp": round(reg_holdout.get("mae", 0) * 100, 1) if reg_holdout.get("mae") else None,
+        "holdout_n_samples": reg_holdout.get("n_samples") or cls_holdout.get("n_samples"),
         "training_mode": meta.get("training_mode"),
         "classifier_shap": shap_cls[:5],
         "regressor_shap": shap_reg[:5],
@@ -369,12 +420,16 @@ def get_analytics(brand: str, request: Request):
         "thin_margin_count": thin_margin_count,
     }
 
+    # Competitor section
+    comp_summary = storage.load_competitor_summary(brand)
+
     return {
         "brand": brand,
         "modelo": modelo,
         "elasticidad": elasticity,
         "ciclo_de_vida": ciclo,
         "impacto": impacto,
+        "competencia": comp_summary,
         "prediccion_vs_real": _build_outcome_summary(brand),
     }
 

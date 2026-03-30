@@ -114,7 +114,7 @@ def _load_alerts_impl():
         try:
             bucket = _get_bucket()
             for blob in bucket.list_blobs(prefix="alerts/"):
-                if blob.name.endswith(".parquet"):
+                if blob.name.endswith("size_curve_alerts.parquet"):
                     import io
                     content = blob.download_as_bytes()
                     df = pd.read_parquet(io.BytesIO(content))
@@ -138,6 +138,113 @@ def _load_alerts_impl():
                     frames.append(df)
 
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+# ── Cross-store consistency alerts (read-only, written by pipeline) ──────────
+
+def load_cross_store_alerts(brand: str = None):
+    """Load cross-store pricing consistency alerts."""
+    key = f"cross_store_alerts:{brand or 'all'}"
+    return _cached(key, lambda: _load_cross_store_alerts_impl(brand), ttl=600)
+
+
+def _load_cross_store_alerts_impl(brand: str = None):
+    import pandas as pd
+
+    frames = []
+
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            prefix = f"alerts/{brand.lower()}/" if brand else "alerts/"
+            for blob in bucket.list_blobs(prefix=prefix):
+                if blob.name.endswith("cross_store_alerts.parquet"):
+                    import io
+                    content = blob.download_as_bytes()
+                    df = pd.read_parquet(io.BytesIO(content))
+                    b = blob.name.split("/")[1]
+                    df["brand"] = b
+                    frames.append(df)
+            if frames:
+                return pd.concat(frames, ignore_index=True)
+        except Exception:
+            pass
+
+    # Local fallback
+    processed = _BASE_DIR / "data" / "processed"
+    if processed.exists():
+        dirs = [processed / brand.lower()] if brand else [d for d in processed.iterdir() if d.is_dir()]
+        for brand_dir in dirs:
+            if brand_dir.is_dir():
+                ap = brand_dir / "cross_store_alerts.parquet"
+                if ap.exists():
+                    df = pd.read_parquet(ap)
+                    df["brand"] = brand_dir.name
+                    frames.append(df)
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+# ── Competitor prices (read-only, written by pipeline) ───────────────────────
+
+def load_competitor_summary(brand: str) -> dict:
+    """Load competitor pricing summary for a brand."""
+    return _cached(f"competitors:{brand}", lambda: _load_competitor_summary_impl(brand), ttl=3600)
+
+
+def _load_competitor_summary_impl(brand: str) -> dict:
+    import pandas as pd
+
+    df = pd.DataFrame()
+
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            blob = bucket.blob(f"competitors/{brand.lower()}/competitor_prices.parquet")
+            if blob.exists():
+                import io
+                content = blob.download_as_bytes()
+                df = pd.read_parquet(io.BytesIO(content))
+        except Exception:
+            pass
+
+    if len(df) == 0:
+        local = _BASE_DIR / "data" / "processed" / brand.lower() / "competitor_prices.parquet"
+        if local.exists():
+            df = pd.read_parquet(local)
+
+    if len(df) == 0:
+        return {"coverage": {}, "items": []}
+
+    valid = df[df["comp_price"] > 0]
+    by_comp = valid.groupby("competitor")["codigo_padre"].nunique().to_dict()
+    total_parents = valid["codigo_padre"].nunique()
+    scraped_at = valid["scraped_at"].max() if "scraped_at" in valid.columns else None
+
+    items = []
+    for parent, group in valid.groupby("codigo_padre"):
+        items.append({
+            "parent_sku": parent,
+            "competitors": [
+                {
+                    "name": row["competitor"],
+                    "price": int(row["comp_price"]),
+                    "list_price": int(row["comp_list_price"]) if pd.notna(row.get("comp_list_price")) else None,
+                    "url": row.get("competitor_url", ""),
+                    "in_stock": bool(row.get("comp_in_stock", True)),
+                }
+                for _, row in group.iterrows()
+            ],
+        })
+
+    return {
+        "scraped_at": scraped_at,
+        "coverage": {
+            "total_parents": total_parents,
+            "by_competitor": by_comp,
+        },
+        "items": items[:100],
+    }
 
 
 # ── Model metadata (read-only) ───────────────────────────────────────────────

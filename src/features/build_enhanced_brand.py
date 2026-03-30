@@ -115,7 +115,23 @@ def build_enhanced_for_brand(brand: str):
     except FileNotFoundError:
         print("  (not available)")
 
-    # 4. Derived season
+    # 4. Competitor pricing features
+    print(f"[{brand}] Adding competitor pricing features...")
+    try:
+        comp = pd.read_parquet(processed / "competitor_prices.parquet")
+        if len(comp) > 0:
+            from src.features.competitor_features import add_competitor_features
+            features = add_competitor_features(features, comp)
+            coverage = (features["comp_count"] > 0).mean()
+            print(f"  Coverage: {coverage:.1%} ({(features['comp_count'] > 0).sum():,} rows)")
+        else:
+            features["comp_count"] = 0
+            print("  (empty file)")
+    except FileNotFoundError:
+        features["comp_count"] = 0
+        print("  (not available)")
+
+    # 5. Derived season
     print(f"[{brand}] Adding derived season...")
     try:
         seasons = pd.read_parquet(processed / "derived_seasons.parquet")

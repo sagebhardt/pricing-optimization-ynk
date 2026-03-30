@@ -27,8 +27,10 @@ from src.features.aggregate_parent import aggregate_to_parent
 from src.models.train_brand import train_brand_models
 from src.models.weekly_pricing_brand import generate_weekly_actions_for_brand
 from src.features.outcome_brand import compute_outcomes_for_brand
+from src.features.cross_store_alerts_brand import run_cross_store_alerts_for_brand
+from src.scraping.scrape_brand import scrape_competitors_for_brand
 
-ALL_STEPS = ["extract", "elasticity", "features", "lifecycle", "size_curve", "enhance", "aggregate", "train", "pricing", "outcome", "sync"]
+ALL_STEPS = ["extract", "scrape_competitors", "elasticity", "features", "lifecycle", "size_curve", "enhance", "aggregate", "cross_store", "train", "pricing", "outcome", "sync"]
 
 PROJECT_ROOT = Path(__file__).parent
 
@@ -67,6 +69,16 @@ def sync_to_gcs(brand: str):
     alerts_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "size_curve_alerts.parquet"
     if alerts_path.exists():
         _upload(alerts_path, f"alerts/{brand_lower}/size_curve_alerts.parquet")
+
+    # 2b. Competitor prices
+    comp_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "competitor_prices.parquet"
+    if comp_path.exists():
+        _upload(comp_path, f"competitors/{brand_lower}/competitor_prices.parquet")
+
+    # 2c. Cross-store consistency alerts
+    cross_store_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "cross_store_alerts.parquet"
+    if cross_store_path.exists():
+        _upload(cross_store_path, f"alerts/{brand_lower}/cross_store_alerts.parquet")
 
     # 3. Training metadata
     meta_path = PROJECT_ROOT / "models" / brand_lower / "training_metadata.json"
@@ -114,12 +126,14 @@ def main():
 
     step_fns = {
         "extract": lambda: extract_brand(brand),
+        "scrape_competitors": lambda: scrape_competitors_for_brand(brand),
         "features": lambda: build_features_for_brand(brand),
         "elasticity": lambda: run_elasticity_for_brand(brand),
         "lifecycle": lambda: build_lifecycle_for_brand(brand),
         "size_curve": lambda: run_size_curve_for_brand(brand),
         "enhance": lambda: build_enhanced_for_brand(brand),
         "aggregate": lambda: aggregate_to_parent(brand),
+        "cross_store": lambda: run_cross_store_alerts_for_brand(brand),
         "train": lambda: train_brand_models(brand),
         "pricing": lambda: generate_weekly_actions_for_brand(brand, target_week=args.week),
         "outcome": lambda: compute_outcomes_for_brand(brand),

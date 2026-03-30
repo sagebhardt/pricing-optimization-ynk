@@ -178,6 +178,16 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .alert-store { color: var(--slate-500); font-size: 11px; }
 .alert-sizes { color: var(--slate-500); font-size: 11px; }
 
+/* Cross-store alerts */
+.alert-card--cross-store { display: flex; flex-direction: column; gap: 4px; grid-template-columns: unset; grid-template-rows: unset; border-color: var(--amber-200); }
+.alert-spread { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: var(--amber-600); }
+.alert-stores { display: flex; flex-wrap: wrap; gap: 4px; }
+.cs-store { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--slate-50); color: var(--slate-700); font-family: var(--font-mono); }
+.cs-store.ecomm { background: var(--blue-50); color: var(--blue-700); }
+.alert-sync { font-size: 11px; color: var(--green-700); font-weight: 600; }
+.alert-reasons-list { display: flex; flex-wrap: wrap; gap: 3px; }
+.reason-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; background: var(--amber-50); color: var(--amber-700); text-transform: uppercase; letter-spacing: .3px; }
+
 /* ── Empty State ── */
 .empty-state { text-align: center; padding: 48px; color: var(--slate-400); font-size: 14px; }
 
@@ -408,7 +418,7 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .an-metric-value { font-family: var(--font-mono); font-size: 16px; font-weight: 600; color: var(--slate-800); }
 .an-metric-label { font-size: 10px; color: var(--slate-500); text-transform: uppercase; letter-spacing: .5px; }
 
-.an-holdout { font-size: 11px; color: var(--slate-500); padding: 4px 8px; background: var(--slate-100); border-radius: 3px; margin-bottom: 8px; }
+.an-metrics-sublabel { font-size: 10px; font-weight: 600; color: var(--slate-400); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
 
 /* SHAP bars */
 .an-shap { margin-top: 6px; }

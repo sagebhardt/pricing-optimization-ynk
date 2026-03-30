@@ -512,6 +512,7 @@ function App() {
   const [brand, setBrand] = useState(BRANDS[0])
   const [actions, setActions] = useState([])
   const [alerts, setAlerts] = useState([])
+  const [crossStoreAlerts, setCrossStoreAlerts] = useState([])
   const [auditLog, setAuditLog] = useState([])
   const [feedback, setFeedback] = useState({})
   const [info, setInfo] = useState(null)
@@ -644,9 +645,11 @@ function App() {
       authFetch(`/decisions?brand=${b.id}`).then(r => r.json()),
       canAudit ? authFetch(`/audit?brand=${b.id}&limit=50`).then(r => r.json()).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
       authFetch(`/feedback?brand=${b.id}`).then(r => r.json()).catch(() => ({ items: {} })),
-    ]).then(([ad, al, mi, dec, aud, fb]) => {
+      authFetch(`/alerts/cross-store?brand=${b.id}`).then(r => r.json()).catch(() => ({ items: [] })),
+    ]).then(([ad, al, mi, dec, aud, fb, cs]) => {
       setActions(ad.items || [])
       setAlerts(al.items || [])
+      setCrossStoreAlerts(cs.items || [])
       setInfo(mi)
       setWeek(ad.week || '')
       setAuditLog(aud.items || [])
@@ -1190,6 +1193,34 @@ function App() {
                 <div className="alert-store">{a.store}</div>
                 <div className="alert-sizes">{a.active_sizes}/{a.total_sizes} tallas</div>
                 <div className="alert-attrition">{(a.attrition_rate * 100).toFixed(0)}%</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {crossStoreAlerts.length > 0 && (
+        <section className="section section--cross-store">
+          <div className="section-header"><AlertTriangle size={16} /><h2>Inconsistencias de precio entre tiendas ({crossStoreAlerts.length})</h2></div>
+          <div className="alert-grid">
+            {crossStoreAlerts.slice(0, 20).map((a, i) => (
+              <div key={i} className="alert-card alert-card--cross-store">
+                <div className="alert-sku">{a.parent_sku}</div>
+                <div className="alert-spread">{(a.price_spread * 100).toFixed(0)}% spread</div>
+                <div className="alert-stores">
+                  {a.stores.map((s, j) => (
+                    <span key={j} className={`cs-store ${s.channel}`}>
+                      {s.store}: ${s.price?.toLocaleString()}
+                      {s.discount_rate > 0.05 ? ` (-${(s.discount_rate * 100).toFixed(0)}%)` : ''}
+                    </span>
+                  ))}
+                </div>
+                {a.sync_price && <div className="alert-sync">Sync: ${a.sync_price.toLocaleString()}</div>}
+                <div className="alert-reasons-list">
+                  {a.alert_reasons.split(';').filter(Boolean).map((r, j) => (
+                    <span key={j} className="reason-badge">{r.replace(/_/g, ' ')}</span>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
