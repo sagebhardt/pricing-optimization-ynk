@@ -40,11 +40,21 @@ Pipeline (runs in Cloud Run Job, Monday 6am CLT):
   run_brand.py                    # Pipeline orchestrator (per brand)
   run_pipeline_job.py             # Cloud Run Job entrypoint (subprocess per brand)
   src/data/extract_brand.py       # PostgreSQL → parquet + costs from ti.productos
+  src/data/extract_brand.py       # PostgreSQL → parquet + costs from ti.productos
+  src/scraping/                     # Competitor pricing scrapers (per-site adapters)
+    scrape_brand.py                 # Orchestrator: runs adapters per brand, fault-isolated
+    falabella.py                    # Falabella.com (__NEXT_DATA__ JSON extraction)
+    brand_sites.py                  # hoka_cl (WooCommerce API), sparta (GraphQL), marathon (SFCC)
+    mercadolibre.py                 # MercadoLibre (OAuth2 — search API blocked as of Mar 2026)
+    matcher.py                      # EAN11 exact + fuzzy name matching (brand-prefix stripping)
+    base.py                         # Abstract scraper with rate limiting, retries, UA rotation
   src/features/
     price_elasticity_brand.py     # Log-log demand elasticity (runs BEFORE features)
     build_features_brand.py       # Base features + official prices + margin targets
     lifecycle_brand.py            # Launch→Growth→Peak→Steady→Decline→Clearance
     size_curve_brand.py           # Size depletion tracking + alerts
+    cross_store_alerts_brand.py   # Cross-store price consistency alerts (channel-aware)
+    competitor_features.py        # ML features from competitor data (price index, gap, pressure)
     build_enhanced_brand.py       # Merge all → v2 features
     aggregate_parent.py           # Child → parent SKU aggregation (incl margin targets)
   src/models/
@@ -60,6 +70,7 @@ API (Cloud Run, slim image ~50MB):
   config/auth.py                  # Google SSO roles, GCS-backed user config with cache
   config/database.py              # DB config, brand configs, store exclusions
   config/vendor_brands.py         # SKU prefix → vendor brand mapping (Nike, Adidas, etc.)
+  config/competitors.py           # Per-brand competitor site config + rate limits
   dashboard/src/App.jsx           # React dashboard (pagination, margin viz, admin panel)
   dashboard/src/AnalyticsDrawer.jsx  # Analytics panel (model, elasticity, lifecycle, impact)
   dashboard/src/StoreSidebar.jsx  # Store/vendor sidebar navigation
@@ -99,7 +110,7 @@ API (Cloud Run, slim image ~50MB):
   - Default (soft rollout): legacy `approved`/`manual` export directly, new `bm_*` statuses need planner
 
 ## Persistence & Storage (GCS)
-- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/` (incl. SHAP CSVs, elasticity parquets), `outcomes/{brand}/`
+- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/`, `outcomes/{brand}/`, `competitors/{brand}/`
 - Supplemental data: `data/raw/{brand}/costs.parquet`, `official_prices.parquet`
 - Decisions: `decisions/{brand}/decisions_{week}.json`
 - Audit log: `audit/{brand}/{YYYY-MM}.jsonl`
@@ -113,20 +124,22 @@ API (Cloud Run, slim image ~50MB):
 ## Data Flow
 ```
 DB (PostgreSQL) → extract → parquet (local)
+               → scrape_competitors (Falabella, hoka_cl, sparta, marathon)
                → costs from ti.productos (auto USD→CLP conversion)
                → costs/official_prices from GCS (HOKA override)
                → elasticity (BEFORE features — needed for margin targets)
                → features (+ official prices + margin targets using elasticity)
-               → lifecycle / size_curve → enhance → aggregate
+               → lifecycle / size_curve → enhance (+ competitor features) → aggregate
+               → cross_store alerts (price consistency across stores)
                → train (margin-optimized for all brands)
-               → pricing (IVA-adjusted cost floor, confidence tiers, margin columns)
+               → pricing (IVA-adjusted cost floor, confidence tiers, competitor-aware urgency)
                → sync to GCS
                → API serves from GCS → Dashboard
 ```
 
 ## Step Order (Important)
 ```
-extract → elasticity → features → lifecycle → size_curve → enhance → aggregate → train → pricing → outcome → sync
+extract → scrape_competitors → elasticity → features → lifecycle → size_curve → enhance → aggregate → cross_store → train → pricing → outcome → sync
 ```
 Elasticity MUST run before features because `add_margin_targets` reads elasticity data from disk to estimate velocity at different discount levels. On fresh containers, running features first produces low-variance targets (everything clusters at 30-35% discount).
 
@@ -217,13 +230,14 @@ Key endpoints (all auth-protected except /health):
 - `POST /decisions/plan` — planner approves/rejects BM decisions
 - `GET /decisions/planner-queue` — items awaiting planner review
 - `GET /export/price-changes` — export approved items (respects manual prices + planner status)
+- `GET /alerts/cross-store` — cross-store pricing consistency alerts (parent-grouped, nested stores)
 
 ## Testing
 ```bash
-python3 -m pytest tests/ -v           # 137 tests, <1s
+python3 -m pytest tests/ -v           # 169 tests, <2s
 python3 -m pytest tests/ --cov=api    # with coverage
 ```
-Test coverage: pricing_math (97%), vendor_brands (100%), API endpoints, pipeline lift table, role permissions.
+Test coverage: pricing_math (97%), vendor_brands (100%), API endpoints, pipeline lift table, role permissions, cross-store alerts, scraping matcher.
 
 ## Deploy Workflow
 ```bash
@@ -265,6 +279,28 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
   - BOLD tested: no improvement (stores too homogeneous). BELSPORT (66 stores) is the real candidate.
 - `docs/manual_ynk_pricing.pdf` — 21-page user manual (Spanish), generated by `docs/generate_manual.py`
 
+## Competitor Pricing Scraping
+- `src/scraping/` package with per-site adapters, product matcher, rate limiting
+- Adapters: Falabella (`__NEXT_DATA__`), hoka_cl (WooCommerce API), sparta.cl (GraphQL), marathon.cl (SFCC HTML)
+- MercadoLibre search API returns 403 even with valid OAuth2 tokens (Mar 2026) — needs marketplace-type app or Playwright
+- Ripley, Paris adapters stubbed for BOLD Phase 2
+- `config/competitors.py`: per-brand site list + rate limits
+- Product matching: EAN11 exact match → fuzzy name match (`difflib.SequenceMatcher`, threshold 0.85)
+- **Gotcha: robots.txt** — most Chilean sites block scraping; public API adapters need `skip_robots = True`
+- **Gotcha: internal product names** — have gender prefixes (M/W) and color codes (BFBG) that need stripping for external search
+- **Gotcha: WooCommerce search** — case-sensitive, some model+number combos fail; use lowercase + fallback to shorter query
+- Competitor features auto-discovered by ML model: `comp_price_index`, `comp_undercut`, `comp_discount_pressure`, etc.
+- **Business rule**: competitor cheaper + healthy velocity = informational only (no urgency boost). Only adds urgency when velocity is weak.
+
+## Cross-Store Pricing Consistency Alerts
+- `src/features/cross_store_alerts_brand.py` — detects inconsistencies across stores for same parent SKU
+- Channel-aware: `is_ecomm_store()` from `config/vendor_brands.py` (AB* prefix = ecomm)
+- Alert types: `price_inconsistency_bm` (>10% B&M spread), `discount_spread` (>10pp), `markdown_split`, `stock_imbalance`, `ecomm_gap` (>15%)
+- Velocity-weighted sync price recommendation per parent SKU
+- Latest week only (avoids BELSPORT bloat)
+- API: `GET /alerts/cross-store?brand=X` — parent-grouped with nested stores array
+- Dashboard: alert cards with price spread, per-store prices, reason badges
+
 ## Known Issues
 - Elasticity estimates conflated with markdown effects — consider excluding markdown periods
 - Belsport has no stock table yet (`stock_belsport` doesn't exist) — uses sales proxy for size curve
@@ -275,3 +311,5 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - Vendor brand prefixes verified from production data; OAKLEY "Other" = optical services (SERV/SFSS), expected
 - Lifecycle thresholds validated: velocity monotonically decreases peak→steady→decline across all brands
 - `api/static/` is gitignored — must run `cp -r dashboard/dist api/static` before API deploy
+- MercadoLibre search API locked down (403) — seller-type OAuth2 tokens lack search scope
+- Falabella rate limits aggressively — 4s delay between requests, may need tuning at scale
