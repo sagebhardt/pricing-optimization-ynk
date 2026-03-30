@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2, Store, Tag, DollarSign } from 'lucide-react'
+import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2, Store, Tag, DollarSign, Target } from 'lucide-react'
 import AnalyticsDrawer from './AnalyticsDrawer'
 import StoreSidebar from './StoreSidebar'
 import ManualPriceModal from './ManualPriceModal'
@@ -513,6 +513,8 @@ function App() {
   const [actions, setActions] = useState([])
   const [alerts, setAlerts] = useState([])
   const [crossStoreAlerts, setCrossStoreAlerts] = useState([])
+  const [performanceData, setPerformanceData] = useState(null)
+  const [outcomeDetails, setOutcomeDetails] = useState([])
   const [auditLog, setAuditLog] = useState([])
   const [feedback, setFeedback] = useState({})
   const [info, setInfo] = useState(null)
@@ -650,6 +652,13 @@ function App() {
       setActions(ad.items || [])
       setAlerts(al.items || [])
       setCrossStoreAlerts(cs.items || [])
+      // Fetch performance data
+      authFetch(`/analytics/${b.id}`).then(r => r.json()).then(an => {
+        setPerformanceData(an?.prediccion_vs_real || null)
+      }).catch(() => {})
+      authFetch(`/analytics/outcomes/${b.id}`).then(r => r.json()).then(od => {
+        setOutcomeDetails(od?.items || [])
+      }).catch(() => {})
       setInfo(mi)
       setWeek(ad.week || '')
       setAuditLog(aud.items || [])
@@ -1057,6 +1066,9 @@ function App() {
         <button className={`vt-btn ${viewMode === 'marcas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('marcas')}>
           <Tag size={13} /> {useVendorGrouping ? 'Marcas' : 'Categorias'}
         </button>
+        <button className={`vt-btn ${viewMode === 'performance' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('performance')}>
+          <Target size={13} /> Rendimiento
+        </button>
       </div>
 
       <div className={`dashboard-body ${viewMode !== 'list' ? 'dashboard-body--sidebar' : ''}`}>
@@ -1071,6 +1083,106 @@ function App() {
                       canApprove={canApprove} title={useVendorGrouping ? 'Marcas' : 'Categorias'} />
       )}
       <div className="main-content">
+
+      {viewMode === 'performance' ? (
+        <div className="perf-page">
+          <div className="section-header"><Target size={16} /><h2>Rendimiento: {performanceData?.available ? `${performanceData.decisions_evaluated} decisiones evaluadas` : 'Sin datos aún'}</h2></div>
+          {performanceData?.available ? (
+            <>
+              <div className="perf-kpis">
+                <div className="perf-kpi">
+                  <div className={`perf-kpi-value ${(performanceData.lift_capture_rate || 0) >= 70 ? 'perf-kpi--green' : (performanceData.lift_capture_rate || 0) >= 50 ? 'perf-kpi--amber' : 'perf-kpi--red'}`}>
+                    {performanceData.lift_capture_rate != null ? `${performanceData.lift_capture_rate}%` : '\u2014'}
+                  </div>
+                  <div className="perf-kpi-label">Lift capturado</div>
+                  <div className="perf-kpi-desc">% del impacto predicho que se materializ\u00f3</div>
+                </div>
+                <div className="perf-kpi">
+                  <div className="perf-kpi-value">{performanceData.pct_direction_correct != null ? `${performanceData.pct_direction_correct}%` : '\u2014'}</div>
+                  <div className="perf-kpi-label">Direcci\u00f3n correcta</div>
+                  <div className="perf-kpi-desc">% de decisiones donde el modelo acert\u00f3 la direcci\u00f3n</div>
+                </div>
+                <div className="perf-kpi">
+                  <div className="perf-kpi-value">{performanceData.median_velocity_error_pct != null ? `${performanceData.median_velocity_error_pct > 0 ? '+' : ''}${performanceData.median_velocity_error_pct}%` : '\u2014'}</div>
+                  <div className="perf-kpi-label">Error mediana velocidad</div>
+                  <div className="perf-kpi-desc">Error t\u00edpico en predicci\u00f3n de velocidad</div>
+                </div>
+                <div className="perf-kpi">
+                  <div className="perf-kpi-value">{performanceData.weeks_evaluated || 0}</div>
+                  <div className="perf-kpi-label">Semanas evaluadas</div>
+                  <div className="perf-kpi-desc">Semanas con decisiones implementadas</div>
+                </div>
+              </div>
+
+              {performanceData.by_confidence && Object.keys(performanceData.by_confidence).length > 0 && (
+                <div className="perf-section">
+                  <h3>Por nivel de confianza</h3>
+                  <div className="perf-table">
+                    <div className="perf-table-header">
+                      <span>Tier</span><span>Decisiones</span><span>Direcci\u00f3n correcta</span><span>Error velocidad</span>
+                    </div>
+                    {Object.entries(performanceData.by_confidence).sort((a,b) => b[1].count - a[1].count).map(([tier, d]) => (
+                      <div key={tier} className="perf-table-row">
+                        <span className={`badge badge--${tier.toLowerCase()}`}>{tier}</span>
+                        <span>{d.count}</span>
+                        <span>{d.pct_direction_correct != null ? `${d.pct_direction_correct}%` : '\u2014'}</span>
+                        <span>{d.median_velocity_error_pct != null ? `${d.median_velocity_error_pct}%` : '\u2014'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {performanceData.by_action_type && Object.keys(performanceData.by_action_type).length > 0 && (
+                <div className="perf-section">
+                  <h3>Por tipo de acci\u00f3n</h3>
+                  <div className="perf-table">
+                    <div className="perf-table-header">
+                      <span>Tipo</span><span>Decisiones</span><span>Direcci\u00f3n correcta</span><span>Error velocidad</span>
+                    </div>
+                    {Object.entries(performanceData.by_action_type).map(([type, d]) => (
+                      <div key={type} className="perf-table-row">
+                        <span style={{fontWeight: 600}}>{type === 'decrease' ? 'Markdown' : type === 'increase' ? 'Aumento' : type}</span>
+                        <span>{d.count}</span>
+                        <span>{d.pct_direction_correct != null ? `${d.pct_direction_correct}%` : '\u2014'}</span>
+                        <span>{d.median_velocity_error_pct != null ? `${d.median_velocity_error_pct}%` : '\u2014'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {outcomeDetails.length > 0 && (
+                <div className="perf-section">
+                  <h3>Detalle por decisi\u00f3n ({outcomeDetails.length})</h3>
+                  <div className="perf-table perf-table--detail">
+                    <div className="perf-table-header">
+                      <span>SKU</span><span>Tienda</span><span>Vel. pred.</span><span>Vel. real</span><span>Error</span><span>Conf.</span>
+                    </div>
+                    {outcomeDetails.slice(0, 50).map((row, i) => (
+                      <div key={i} className="perf-table-row">
+                        <span className="sku-code">{row.parent_sku?.slice(0, 12)}</span>
+                        <span>{row.store}</span>
+                        <span>{row.predicted_velocity?.toFixed(1) ?? '\u2014'}</span>
+                        <span>{row.actual_velocity?.toFixed(1) ?? '\u2014'}</span>
+                        <span className={Math.abs(row.velocity_error_pct || 0) > 50 ? 'perf-err--bad' : ''}>{row.velocity_error_pct != null ? `${row.velocity_error_pct > 0 ? '+' : ''}${Math.round(row.velocity_error_pct)}%` : '\u2014'}</span>
+                        <span className={`an-conf-badge an-conf-${(row.confidence_tier || 'low').toLowerCase()}`}>{row.confidence_tier}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="empty-state">
+              Las decisiones necesitan 1-2 semanas de datos para evaluar el rendimiento.<br/>
+              Aprueba recomendaciones y el sistema comparar\u00e1 predicciones vs resultados reales.
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
+
       <div className="toolbar">
         <div className="search-box">
           <Search size={15} />
@@ -1241,6 +1353,9 @@ function App() {
             ))}
           </div>
         </section>
+      )}
+
+      </>
       )}
 
       </div>{/* main-content */}
