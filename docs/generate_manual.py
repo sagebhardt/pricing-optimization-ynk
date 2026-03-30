@@ -825,17 +825,18 @@ def build_manual():
     story.append(sp(8))
     story.append(make_table([
         ['Marca', 'Tiendas', 'AUC\nClasificador', 'R\u00b2\nRegresor', 'MAE\n(pp)', 'Muestras', 'Fuente\ncostos'],
-        ['HOKA', '3', '0.988', '0.820', '4.7', '10,822', 'GCS (manual)'],
-        ['BOLD', '35', '0.910', '0.566', '7.2', '~600K', 'ti.productos'],
-        ['BAMERS', '25', '0.950', '0.492', '7.8', '~200K', 'ti.productos'],
-        ['OAKLEY', '8', '0.941', '0.596', '6.3', '~100K', 'ti.productos'],
-        ['BELSPORT', '66', '0.948', '0.538*', '1.6', '2,792,288', 'ti.productos'],
+        ['HOKA', '3', '0.989', '0.513 (0.911)', '1.0', '10,822', 'GCS (manual)'],
+        ['BOLD', '35', '0.968', '0.741 (0.830)', '0.9', '~600K', 'ti.productos'],
+        ['BAMERS', '25', '—*', '—*', '—*', '~200K', 'ti.productos'],
+        ['OAKLEY', '8', '0.996', '0.833 (0.903)', '0.8', '~100K', 'ti.productos'],
+        ['BELSPORT', '66', '—*', '—*', '—*', '~5M', 'ti.productos'],
     ], col_widths=[1.0*inch, 0.7*inch, 0.9*inch, 0.8*inch, 0.7*inch, 1.0*inch, 1.4*inch]))
     story.append(sp(4))
     story.append(note(
-        "* BELSPORT: R\u00b2 de validación cruzada = 0.538, pero R\u00b2 de holdout (últimas 4 semanas) = 0.704, "
-        "lo que sugiere que el modelo generaliza bien a datos futuros. El MAE bajo (1.6pp) refleja que la "
-        "mayoría de productos en BELSPORT tienen descuentos concentrados en un rango estrecho."
+        "R\u00b2 se muestra como: CV (holdout). El holdout es la métrica más confiable — mide la precisión "
+        "en semanas futuras nunca vistas. Regresor usa LightGBM; clasificador usa XGBoost. "
+        "Todas las marcas ahora usan entrenamiento optimizado por margen. "
+        "* BAMERS y BELSPORT pendientes de actualización al cierre de esta edición."
     ))
     story.append(sp(8))
     story.append(h3("Interpretación"))
