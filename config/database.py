@@ -30,6 +30,9 @@ EXCLUDE_STORES_PRICING = [
     "508",    # Bamers Digital II
     "D005",   # Oakley Ventas Internas
     "AB10",   # Belsport E-commerce / Digital
+    "2019",   # Bold — 99% click & collect (ecomm fulfillment point)
+    "B609",   # Bamers — 100% click & collect
+    "BEC2",   # Bamers — 98% click & collect (ecomm fulfillment)
 ]
 
 # Brand configurations

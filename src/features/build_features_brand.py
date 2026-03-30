@@ -67,25 +67,60 @@ def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
         (sales["tipo_entrega"] == "Retiro en Tienda") if "tipo_entrega" in sales.columns else False
     )
 
-    # Weekly sales aggregation
+    # Weekly sales aggregation — volume from ALL channels (markdown impacts both)
     weekly = (
         sales.groupby(["sku", "centro", "week"])
         .agg(
             units_sold=("cantidad", "sum"),
             gross_revenue=("precio_final", "sum"),
-            total_discount=("descuento", "sum"),
-            total_list_value=("precio_lista", "sum"),
             txn_count=("folio", "nunique"),
-            avg_precio_lista=("precio_lista", "mean"),
-            avg_precio_final=("precio_final", "mean"),
-            min_precio_lista=("precio_lista", "min"),
-            max_precio_lista=("precio_lista", "max"),
             click_collect_units=("is_click_collect", "sum"),
         )
         .reset_index()
     )
 
-    # In-store units (excluding click & collect — true walk-in demand)
+    # Price features from RETAIL-ONLY transactions (prevents ecomm-specific discounts
+    # like "15% first purchase" from contaminating store price signal)
+    retail_sales = sales[~sales["is_click_collect"]]
+    if len(retail_sales) > 0:
+        retail_prices = (
+            retail_sales.groupby(["sku", "centro", "week"])
+            .agg(
+                total_discount=("descuento", "sum"),
+                total_list_value=("precio_lista", "sum"),
+                avg_precio_lista=("precio_lista", "mean"),
+                avg_precio_final=("precio_final", "mean"),
+                min_precio_lista=("precio_lista", "min"),
+                max_precio_lista=("precio_lista", "max"),
+            )
+            .reset_index()
+        )
+        weekly = weekly.merge(retail_prices, on=["sku", "centro", "week"], how="left")
+
+    # Fallback for pure C&C rows (no retail sales at that store-week) — use blended prices
+    blended = (
+        sales.groupby(["sku", "centro", "week"])
+        .agg(
+            _bl_discount=("descuento", "sum"),
+            _bl_list_value=("precio_lista", "sum"),
+            _bl_avg_lista=("precio_lista", "mean"),
+            _bl_avg_final=("precio_final", "mean"),
+            _bl_min_lista=("precio_lista", "min"),
+            _bl_max_lista=("precio_lista", "max"),
+        )
+        .reset_index()
+    )
+    weekly = weekly.merge(blended, on=["sku", "centro", "week"], how="left")
+    for col, bl in [("total_discount", "_bl_discount"), ("total_list_value", "_bl_list_value"),
+                     ("avg_precio_lista", "_bl_avg_lista"), ("avg_precio_final", "_bl_avg_final"),
+                     ("min_precio_lista", "_bl_min_lista"), ("max_precio_lista", "_bl_max_lista")]:
+        if col not in weekly.columns:
+            weekly[col] = weekly[bl]
+        else:
+            weekly[col] = weekly[col].fillna(weekly[bl])
+    weekly.drop(columns=[c for c in weekly.columns if c.startswith("_bl_")], inplace=True)
+
+    # Click & collect context
     weekly["instore_units"] = (weekly["units_sold"] - weekly["click_collect_units"]).clip(lower=0)
     weekly["click_collect_ratio"] = np.where(
         weekly["units_sold"] > 0,

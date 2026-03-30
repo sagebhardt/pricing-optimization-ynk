@@ -46,6 +46,7 @@ EXCLUDE_COLS = [
     "will_discount_4w", "future_max_disc_4w", "future_velocity_2w", "velocity_lift",
     "color1", "tercera_jerarquia",
     "should_reprice", "optimal_disc_margin", "optimal_profit",
+    "click_collect_units", "instore_units", "instore_velocity_4w", "click_collect_ratio",
 ]
 
 
@@ -188,13 +189,15 @@ def classify_urgency(row):
     reasons = []
     urgency_score = 0
 
-    # Click & collect adjustment: use in-store velocity for B&M urgency assessment
+    # Click & collect context: flag C&C ratio so brand managers see the channel mix.
+    # Note: C&C sales DO respond to pricing (ecomm price ≈ store price 54% of the time),
+    # so total velocity is the correct signal for impact projections.
     cc_ratio = row.get("click_collect_ratio", 0)
-    if pd.notna(cc_ratio) and cc_ratio > 0.3:
-        instore_vel = row.get("instore_velocity_4w")
-        total_vel = row.get("velocity_4w", 0)
-        if pd.notna(instore_vel) and total_vel > 0:
-            reasons.append(f"Click&collect {cc_ratio:.0%} — in-store vel {instore_vel:.1f} vs total {total_vel:.1f}")
+    cc_ratio = cc_ratio if pd.notna(cc_ratio) else 0
+    if cc_ratio > 0.3:
+        instore_vel = row.get("instore_velocity_4w", 0)
+        instore_vel = instore_vel if pd.notna(instore_vel) else 0
+        reasons.append(f"Click&collect {cc_ratio:.0%} of sales (in-store: {instore_vel:.1f} u/sem)")
 
     # Velocity collapse
     vel_trend = row.get("velocity_trend", 1.0)
