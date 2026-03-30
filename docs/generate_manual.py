@@ -827,16 +827,15 @@ def build_manual():
         ['Marca', 'Tiendas', 'AUC\nClasificador', 'R\u00b2\nRegresor', 'MAE\n(pp)', 'Muestras', 'Fuente\ncostos'],
         ['HOKA', '3', '0.989', '0.513 (0.911)', '1.0', '10,822', 'GCS (manual)'],
         ['BOLD', '35', '0.968', '0.741 (0.830)', '0.9', '~600K', 'ti.productos'],
-        ['BAMERS', '25', '—*', '—*', '—*', '~200K', 'ti.productos'],
+        ['BAMERS', '25', '0.999', '0.921 (0.890)', '0.6', '~200K', 'ti.productos'],
         ['OAKLEY', '8', '0.996', '0.833 (0.903)', '0.8', '~100K', 'ti.productos'],
-        ['BELSPORT', '66', '—*', '—*', '—*', '~5M', 'ti.productos'],
+        ['BELSPORT', '66', '0.947', '0.531 (0.676)', '1.6', '~2.8M', 'ti.productos'],
     ], col_widths=[1.0*inch, 0.7*inch, 0.9*inch, 0.8*inch, 0.7*inch, 1.0*inch, 1.4*inch]))
     story.append(sp(4))
     story.append(note(
         "R\u00b2 se muestra como: CV (holdout). El holdout es la métrica más confiable — mide la precisión "
         "en semanas futuras nunca vistas. Regresor usa LightGBM; clasificador usa XGBoost. "
-        "Todas las marcas ahora usan entrenamiento optimizado por margen. "
-        "* BAMERS y BELSPORT pendientes de actualización al cierre de esta edición."
+        "Todas las marcas usan entrenamiento optimizado por margen. Métricas de producción, Marzo 2026."
     ))
     story.append(sp(8))
     story.append(h3("Interpretación"))
