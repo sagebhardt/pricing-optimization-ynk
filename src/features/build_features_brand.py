@@ -717,6 +717,14 @@ def build_features_for_brand(brand: str):
     else:
         print(f"[{brand}] No stock data available — skipping inventory features")
 
+    # Weather features (Open-Meteo API, cached locally)
+    print(f"[{brand}] Adding weather features...")
+    try:
+        from src.features.weather_brand import add_weather_features
+        weekly = add_weather_features(weekly, stores)
+    except Exception as e:
+        print(f"    Weather features failed: {e}")
+
     print(f"[{brand}] Adding foot traffic features...")
     weekly = add_foot_traffic_features(weekly, traffic)
 

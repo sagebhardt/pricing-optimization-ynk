@@ -266,12 +266,79 @@ class MarathonScraper(CompetitorScraper):
         return results
 
 
+class TheLineScraper(CompetitorScraper):
+    """theline.cl — VTEX platform with JSON-LD ItemList."""
+
+    name = "theline"
+    base_url = "https://www.theline.cl"
+    skip_robots = True
+
+    def search_product(self, product_name, brand, ean11=None):
+        # VTEX: browse brand category page (text search doesn't filter well)
+        brand_slug = brand.lower().replace(" ", "-") if brand else ""
+        resp = self.fetch(f"{self.base_url}/{brand_slug}", params={"PS": 48})
+        if not resp:
+            return []
+
+        # Extract JSON-LD ItemList
+        ld_matches = re.findall(
+            r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+            resp.text, re.DOTALL,
+        )
+
+        results = []
+        for ld_text in ld_matches:
+            try:
+                ld = json.loads(ld_text)
+            except json.JSONDecodeError:
+                continue
+
+            if ld.get("@type") != "ItemList":
+                continue
+
+            for element in ld.get("itemListElement", []):
+                item = element.get("item", {})
+                name = item.get("name", "")
+                offers = item.get("offers", {})
+                price = offers.get("lowPrice") or offers.get("price", 0)
+
+                try:
+                    price = int(float(price))
+                except (ValueError, TypeError):
+                    continue
+
+                if price <= 0:
+                    continue
+
+                item_brand = item.get("brand", {}).get("name", "")
+                method, score = match_product(
+                    product_name, brand, name, item_brand, ean_matched=False,
+                )
+                if method == "no_match":
+                    continue
+
+                url = item.get("@id", "")
+                results.append({
+                    "competitor_url": url,
+                    "comp_price": price,
+                    "comp_list_price": price,
+                    "comp_discount": 0.0,
+                    "comp_in_stock": True,
+                    "matched_name": name,
+                    "match_method": method,
+                    "match_score": round(score, 3),
+                })
+
+        return results
+
+
 def get_brand_site_scraper(name: str) -> CompetitorScraper:
     """Factory for brand site scrapers."""
     scrapers = {
         "hoka_cl": HokaClScraper,
         "sparta": SpartaScraper,
         "marathon": MarathonScraper,
+        "theline": TheLineScraper,
     }
     cls = scrapers.get(name)
     if cls is None:

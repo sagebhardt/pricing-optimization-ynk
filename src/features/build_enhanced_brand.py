@@ -131,7 +131,17 @@ def build_enhanced_for_brand(brand: str):
         features["comp_count"] = 0
         print("  (not available)")
 
-    # 5. Derived season
+    # 5. Category interaction features
+    print(f"[{brand}] Adding category interaction features...")
+    try:
+        from src.features.category_interactions import add_category_interactions
+        features = add_category_interactions(features)
+        interaction_cols = [c for c in features.columns if c.startswith("cat_x_")]
+        print(f"  Added {len(interaction_cols)} interaction features: {interaction_cols}")
+    except Exception as e:
+        print(f"  Category interactions failed: {e}")
+
+    # 6. Derived season
     print(f"[{brand}] Adding derived season...")
     try:
         seasons = pd.read_parquet(processed / "derived_seasons.parquet")
