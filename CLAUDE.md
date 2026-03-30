@@ -128,8 +128,8 @@ DB (PostgreSQL) → extract → parquet (local)
                → costs from ti.productos (auto USD→CLP conversion)
                → costs/official_prices from GCS (HOKA override)
                → elasticity (BEFORE features — needed for margin targets)
-               → features (+ official prices + margin targets using elasticity)
-               → lifecycle / size_curve → enhance (+ competitor features) → aggregate
+               → features (+ official prices + margin targets + weather data)
+               → lifecycle / size_curve → enhance (+ competitor features + category interactions) → aggregate
                → cross_store alerts (price consistency across stores)
                → train (margin-optimized for all brands)
                → pricing (IVA-adjusted cost floor, confidence tiers, competitor-aware urgency)
@@ -236,6 +236,7 @@ Key endpoints (all auth-protected except /health):
 ```bash
 python3 -m pytest tests/ -v           # 169 tests, <2s
 python3 -m pytest tests/ --cov=api    # with coverage
+python3 -m pytest tests/ --cov=api    # with coverage
 ```
 Test coverage: pricing_math (97%), vendor_brands (100%), API endpoints, pipeline lift table, role permissions, cross-store alerts, scraping matcher.
 
@@ -290,7 +291,23 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - **Gotcha: internal product names** — have gender prefixes (M/W) and color codes (BFBG) that need stripping for external search
 - **Gotcha: WooCommerce search** — case-sensitive, some model+number combos fail; use lowercase + fallback to shorter query
 - Competitor features auto-discovered by ML model: `comp_price_index`, `comp_undercut`, `comp_discount_pressure`, etc.
+- Competitor features auto-discovered by ML model: `comp_price_index`, `comp_undercut`, `comp_discount_pressure`, etc.
 - **Business rule**: competitor cheaper + healthy velocity = informational only (no urgency boost). Only adds urgency when velocity is weak.
+
+## Weather Data Integration
+- `src/features/weather_brand.py` — fetches historical weather from Open-Meteo API (free, no key)
+- `config/weather.py` — region → coordinates mapping for all Chilean regions with stores
+- Features: `avg_temp`, `max_temp`, `min_temp`, `total_rain`, `rain_days`, `temp_deviation`, `is_rainy_week`
+- Merged on (centro → region, week) grain via stores.parquet
+- Cached locally as `data/raw/weather_{region}.parquet` to avoid re-fetching
+- Integrated in `build_features_brand.py` after seasonality, before foot traffic
+
+## Category Interaction Features
+- `src/features/category_interactions.py` — interaction terms between product category and other dimensions
+- Features: `cat_x_lifecycle`, `cat_x_season`, `cat_x_velocity`, `cat_x_age` (all integer-encoded categoricals)
+- Lets single model learn "Footwear in decline behaves differently than Apparel in decline"
+- Auto-discovered by ML model (not in EXCLUDE_COLS); SHAP shows which are predictive
+- Preferred over separate per-category models (Apparel/Equipment have too few rows for reliable models)
 
 ## Cross-Store Pricing Consistency Alerts
 - `src/features/cross_store_alerts_brand.py` — detects inconsistencies across stores for same parent SKU
