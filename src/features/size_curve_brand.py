@@ -81,7 +81,8 @@ def build_size_availability_from_stock(stock, products):
     if len(in_stock_core) > 0:
         core_active = in_stock_core.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("core_sizes_active").reset_index()
         weekly_agg = weekly_agg.merge(core_active, on=["codigo_padre", "centro", "week"], how="left")
-    weekly_agg["core_sizes_active"] = weekly_agg.get("core_sizes_active", 0).fillna(0).astype(int)
+    if "core_sizes_active" not in weekly_agg.columns:
+        weekly_agg["core_sizes_active"] = 0
 
     # Ever: total sizes + core sizes per parent-store
     total_ever = in_stock.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("total_sizes_ever")
@@ -89,7 +90,8 @@ def build_size_availability_from_stock(stock, products):
     if len(in_stock_core) > 0:
         core_ever = in_stock_core.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("core_sizes_total").reset_index()
         ever_agg = ever_agg.merge(core_ever, on=["codigo_padre", "centro"], how="left")
-    ever_agg["core_sizes_total"] = ever_agg.get("core_sizes_total", 0).fillna(0).astype(int)
+    if "core_sizes_total" not in ever_agg.columns:
+        ever_agg["core_sizes_total"] = 0
 
     result = weekly_agg.merge(ever_agg, on=["codigo_padre", "centro"], how="left")
 
