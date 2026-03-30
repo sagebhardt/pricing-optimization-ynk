@@ -12,6 +12,8 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
+import re
+
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
@@ -19,6 +21,54 @@ from datetime import datetime
 from config.competitors import BRAND_COMPETITORS
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+# Words that look like color codes but are part of model names
+_MODEL_WORDS = {"GTX", "MID", "ATR", "LOW", "RUN", "HAT", "LS", "PACK", "SOCK", "CREW", "TANK", "TEE"}
+
+
+def _extract_model_name(raw_name: str) -> str:
+    """Extract a clean model name from internal product name for search.
+
+    "W BONDI 7 BFBG" → "BONDI 7"
+    "M CHALLENGER 8 MSTRD" → "CHALLENGER 8"
+    "SPEEDGOAT 6 TTT 11" → "SPEEDGOAT 6"
+    "U ORA RECOVERY SLIDE 3 WWH 12/14" → "ORA RECOVERY SLIDE 3"
+    "M MACH 5 BLACK / MULTI" → "MACH 5"
+    "HOKA RUN HAT OTM N° OSFA" → "RUN HAT"
+    """
+    name = str(raw_name).strip()
+
+    # Strip gender prefix
+    name = re.sub(r'^[MWU]\s+', '', name)
+
+    # Strip brand prefix
+    for prefix in ("HOKA ONE ONE ", "HOKA "):
+        if name.upper().startswith(prefix):
+            name = name[len(prefix):]
+
+    # Strip N° / talla suffixes
+    name = re.sub(r'\s+N[°º]\s*\S+.*$', '', name)
+
+    # Strip "/ color description" suffix
+    name = re.sub(r'\s*/\s*[A-Z].*$', '', name)
+
+    # From the right: strip trailing size, then color code, then stop.
+    # Size is always AFTER color code in internal names: "BONDI 9 BFBG 7" or "MACH 6 FLV 7"
+    # So strip: trailing_size → color_code → STOP (keep model number)
+    tokens = name.split()
+
+    # 1. Strip trailing letter sizes (S, M, L, XL, U, T, OSFA) and number sizes
+    _LETTER_SIZES = {"S", "M", "L", "XL", "XXL", "U", "W", "T", "OSFA"}
+    while tokens and (re.match(r'^\d+[,./]?\d*$', tokens[-1]) or tokens[-1] in _LETTER_SIZES):
+        tokens.pop()
+
+    # 2. Strip trailing color code (3-6 uppercase, not model words)
+    while tokens and re.match(r'^[A-Z]{3,6}$', tokens[-1]) and tokens[-1] not in _MODEL_WORDS:
+        tokens.pop()
+
+    # 3. STOP — remaining tokens include the model number
+
+    return " ".join(tokens).strip()
 
 
 def _get_adapter(name: str):
@@ -69,13 +119,13 @@ def _build_catalog(brand: str) -> pd.DataFrame:
         })
     )
 
-    # Clean product names (strip size/talla suffixes)
-    catalog["product_name"] = (
-        catalog["product_name"]
-        .str.replace(r'\s*N[°º]?\s*[\d,\.]+\s*$', '', regex=True)
-        .str.replace(r'\s*T/[A-Z0-9]+\s*$', '', regex=True)
-        .str.strip()
-    )
+    # Extract clean model names for search queries
+    catalog["product_name"] = catalog["product_name"].apply(_extract_model_name)
+
+    # Deduplicate by model name — avoid searching "BONDI 9" once per color variant
+    # Keep first parent SKU per model name (results will map back via matching)
+    catalog = catalog[catalog["product_name"].str.len() > 0]
+    catalog = catalog.drop_duplicates(subset="product_name", keep="first")
 
     # Add EAN11 if available (take any non-null EAN per parent)
     if "ean11" in products.columns:
