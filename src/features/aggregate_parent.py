@@ -168,6 +168,11 @@ def aggregate_to_parent(brand: str):
             velocity_8w=("velocity_8w", "sum"),
             cumulative_units=("cumulative_units", "sum"),
             units_returned=("units_returned", "sum"),
+            **({
+                "click_collect_units": ("click_collect_units", "sum"),
+                "instore_units": ("instore_units", "sum"),
+                "instore_velocity_4w": ("instore_velocity_4w", "sum"),
+            } if "click_collect_units" in child.columns else {}),
 
             # Prices: MEDIAN (same across sizes)
             avg_precio_lista=("avg_precio_lista", "median"),
@@ -321,6 +326,17 @@ def aggregate_to_parent(brand: str):
                        "genero", "grupo_etario"]],
         on="codigo_padre", how="left",
     )
+
+    # Click & collect ratio at parent level
+    if "click_collect_units" in parent.columns:
+        parent["click_collect_ratio"] = np.where(
+            parent["units_sold"] > 0,
+            parent["click_collect_units"] / parent["units_sold"],
+            0,
+        )
+        cc_stores = (parent["click_collect_ratio"] > 0.5).sum()
+        if cc_stores > 0:
+            print(f"  {cc_stores} parent-store-weeks have >50% click & collect")
 
     # Pass through weather features (same for all children in a parent-store-week)
     weather_cols = [c for c in child.columns if c in ("avg_temp", "max_temp", "min_temp",

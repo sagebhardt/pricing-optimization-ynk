@@ -62,6 +62,11 @@ def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
     sales = txn[txn["cantidad"] > 0].copy()
     returns = txn[txn["cantidad"] < 0].copy()
 
+    # Tag click & collect (online order, store pickup)
+    sales["is_click_collect"] = (
+        (sales["tipo_entrega"] == "Retiro en Tienda") if "tipo_entrega" in sales.columns else False
+    )
+
     # Weekly sales aggregation
     weekly = (
         sales.groupby(["sku", "centro", "week"])
@@ -75,8 +80,17 @@ def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
             avg_precio_final=("precio_final", "mean"),
             min_precio_lista=("precio_lista", "min"),
             max_precio_lista=("precio_lista", "max"),
+            click_collect_units=("is_click_collect", "sum"),
         )
         .reset_index()
+    )
+
+    # In-store units (excluding click & collect — true walk-in demand)
+    weekly["instore_units"] = (weekly["units_sold"] - weekly["click_collect_units"]).clip(lower=0)
+    weekly["click_collect_ratio"] = np.where(
+        weekly["units_sold"] > 0,
+        weekly["click_collect_units"] / weekly["units_sold"],
+        0,
     )
 
     # Weekly returns
@@ -125,6 +139,13 @@ def add_velocity_features(weekly: pd.DataFrame) -> pd.DataFrame:
     weekly["cumulative_units"] = (
         weekly.groupby(["sku", "centro"], sort=False)["units_sold"].cumsum()
     )
+
+    # In-store velocity (excluding click & collect) — true walk-in demand
+    if "instore_units" in weekly.columns:
+        gb_instore = weekly.groupby(["sku", "centro"], sort=False)["instore_units"]
+        rolled = gb_instore.rolling(4, min_periods=1).mean()
+        weekly["instore_velocity_4w"] = rolled.droplevel([0, 1]).sort_index().values
+        print(f"      instore_velocity_4w done")
 
     return weekly
 

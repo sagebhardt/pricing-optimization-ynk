@@ -188,6 +188,14 @@ def classify_urgency(row):
     reasons = []
     urgency_score = 0
 
+    # Click & collect adjustment: use in-store velocity for B&M urgency assessment
+    cc_ratio = row.get("click_collect_ratio", 0)
+    if pd.notna(cc_ratio) and cc_ratio > 0.3:
+        instore_vel = row.get("instore_velocity_4w")
+        total_vel = row.get("velocity_4w", 0)
+        if pd.notna(instore_vel) and total_vel > 0:
+            reasons.append(f"Click&collect {cc_ratio:.0%} — in-store vel {instore_vel:.1f} vs total {total_vel:.1f}")
+
     # Velocity collapse
     vel_trend = row.get("velocity_trend", 1.0)
     if vel_trend < 0.5:
