@@ -70,6 +70,8 @@ def build_size_availability_from_stock(stock, products):
     del footwear  # free memory
 
     in_stock = eow[eow["in_stock"] == 1]
+    if len(in_stock) == 0:
+        return pd.DataFrame()
     in_stock_core = in_stock[in_stock["talla"].isin(CORE_SIZES)]
 
     # ── Steps 1-4 combined: two groupbys instead of four, then one merge ──
