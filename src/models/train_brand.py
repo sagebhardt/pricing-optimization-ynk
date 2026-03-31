@@ -32,6 +32,7 @@ EXCLUDE_COLS = [
     "will_discount_4w", "future_max_disc_4w", "future_velocity_2w", "velocity_lift",
     "color1", "tercera_jerarquia",
     "should_reprice", "optimal_disc_margin", "optimal_profit",
+    "click_collect_units", "instore_units", "instore_velocity_4w", "click_collect_ratio",
 ]
 
 CATEGORICAL_COLS = ["primera_jerarquia", "segunda_jerarquia", "genero", "grupo_etario"]
