@@ -1097,7 +1097,7 @@ function App() {
         </button>
       </div>
 
-      <div className={`dashboard-body ${viewMode !== 'list' ? 'dashboard-body--sidebar' : ''}`}>
+      <div className={`dashboard-body ${(viewMode === 'tiendas' || viewMode === 'marcas') ? 'dashboard-body--sidebar' : ''}`}>
       {viewMode === 'tiendas' && (
         <StoreSidebar roster={storeRoster} activeItem={filterStore !== 'all' ? filterStore : null}
                       onSelect={name => handleSidebarSelect(name)} onApprove={name => handleSidebarApprove(name, 'store')}
@@ -1361,7 +1361,7 @@ function App() {
               )}
             </>
           ) : (
-            <div className="empty-state">Sin datos de competencia a\u00fan. Ejecuta el pipeline para obtener precios de competidores.</div>
+            <div className="empty-state">Sin datos de competencia. Ejecuta el pipeline para obtener precios de competidores.</div>
           )}
         </div>
       ) : viewMode === 'performance' ? (

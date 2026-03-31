@@ -237,8 +237,8 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 
 /* ── Product Channel View ── */
 .prod-page { padding: 4px 0; }
-.prod-list { display: flex; flex-direction: column; gap: 6px; }
-.prod-card { background: #fff; border: 1px solid var(--slate-200); border-radius: var(--radius); padding: 12px 16px; }
+.prod-list { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.prod-card { background: #fff; border: 1px solid var(--slate-200); border-radius: var(--radius); padding: 12px 16px; width: 100%; }
 .prod-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .prod-name { font-size: 13px; font-weight: 600; color: var(--slate-900); }
 .prod-vendor { font-size: 10px; padding: 1px 6px; background: var(--slate-100); color: var(--slate-500); border-radius: 3px; }
