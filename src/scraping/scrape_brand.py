@@ -127,6 +127,17 @@ def _build_catalog(brand: str) -> pd.DataFrame:
     catalog = catalog[catalog["product_name"].str.len() > 0]
     catalog = catalog.drop_duplicates(subset="product_name", keep="first")
 
+    # Cap at 200 products to stay within Cloud Run timeout (~4s/request × 200 = ~13min/site)
+    # Prioritize footwear over apparel/accessories
+    MAX_SCRAPE = 200
+    if len(catalog) > MAX_SCRAPE:
+        cat_priority = {"Footwear": 0, "Calzado": 0}
+        catalog["_cat_sort"] = catalog.get("primera_jerarquia", pd.Series(dtype=str)).map(
+            lambda x: cat_priority.get(x, 1) if pd.notna(x) else 1
+        )
+        catalog = catalog.sort_values("_cat_sort").head(MAX_SCRAPE).drop(columns=["_cat_sort"])
+        print(f"  Capped to {MAX_SCRAPE} products (footwear first)")
+
     # Add EAN11 if available (take any non-null EAN per parent)
     if "ean11" in products.columns:
         ean_map = (
