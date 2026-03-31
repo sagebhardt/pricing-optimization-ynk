@@ -1127,6 +1127,20 @@ function App() {
         const skuList = Object.values(grouped)
           .filter(g => g.bm.length > 0 || g.ecom.length > 0)
           .sort((a, b) => {
+            // Sort by vendor brand first, then subcategory (sneakers first), then rev delta
+            const aBrand = (a.vendor_brand || 'ZZZ').toLowerCase()
+            const bBrand = (b.vendor_brand || 'ZZZ').toLowerCase()
+            if (aBrand !== bBrand) return aBrand.localeCompare(bBrand)
+            // Sneakers/Running/Zapatillas first
+            const catPriority = (cat) => {
+              const c = (cat || '').toLowerCase()
+              if (c.includes('sneaker') || c.includes('running') || c.includes('zapatilla') || c.includes('footwear')) return 0
+              if (c.includes('outdoor') || c.includes('trail')) return 1
+              return 2
+            }
+            const aCat = catPriority(a.subcategory || a.category)
+            const bCat = catPriority(b.subcategory || b.category)
+            if (aCat !== bCat) return aCat - bCat
             const aRev = [...a.bm, ...a.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
             const bRev = [...b.bm, ...b.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
             return bRev - aRev
