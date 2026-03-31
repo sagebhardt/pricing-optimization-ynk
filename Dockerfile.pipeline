@@ -12,6 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt google-cloud-storage>=2.14
 
 # Pipeline code
+ARG CACHE_BUST=1774979819
 COPY run_brand.py .
 COPY run_weekly.sh .
 COPY src/ src/
