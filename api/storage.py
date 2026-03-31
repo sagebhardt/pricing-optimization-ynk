@@ -328,6 +328,10 @@ def _load_comp_analytics_impl(brand: str) -> dict:
             "position": position,
             "cheapest_site": cheapest_site,
             "n_competitors": len(item["competitors"]),
+            "competitors": [
+                {"name": c["name"], "price": c["price"], "in_stock": c.get("in_stock", True), "url": c.get("url", "")}
+                for c in item["competitors"]
+            ],
         })
 
     total = len(products)

@@ -256,6 +256,29 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .comp-gap--bad { color: var(--red-600); font-weight: 600; }
 .comp-gap--good { color: var(--green-600); font-weight: 600; }
 
+/* Competitor search + SKU detail */
+.comp-search { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #fff; border: 1px solid var(--slate-200); border-radius: var(--radius); margin-bottom: 12px; }
+.comp-search input { border: none; outline: none; flex: 1; font-size: 13px; font-family: var(--font-body); }
+
+.comp-sku-card { background: #fff; border: 1px solid var(--slate-200); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 8px; }
+.comp-sku-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.comp-position { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 3px; text-transform: uppercase; }
+.comp-position--expensive { background: var(--red-100); color: var(--red-600); }
+.comp-position--cheaper { background: var(--green-100); color: var(--green-700); }
+.comp-position--parity { background: var(--slate-100); color: var(--slate-500); }
+
+.comp-sku-prices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.comp-sku-price { text-align: center; }
+.comp-sku-plabel { display: block; font-size: 10px; color: var(--slate-400); text-transform: uppercase; letter-spacing: .04em; }
+
+.comp-sku-competitors { margin-top: 8px; border-top: 1px solid var(--slate-100); padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.comp-sku-comp { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.comp-sku-cname { font-weight: 600; color: var(--slate-700); min-width: 80px; }
+.comp-stock--yes { font-size: 10px; color: var(--green-600); }
+.comp-stock--no { font-size: 10px; color: var(--red-500); }
+.comp-sku-link { font-size: 10px; color: var(--blue-500); text-decoration: none; margin-left: auto; }
+.comp-sku-link:hover { text-decoration: underline; }
+
 @media (max-width: 768px) {
   .comp-kpis { grid-template-columns: 1fr 1fr; }
   .comp-table-header--6, .comp-table-row--6 { grid-template-columns: 2fr 1fr 1fr 1fr; }

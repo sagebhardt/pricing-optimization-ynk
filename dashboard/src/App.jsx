@@ -1112,6 +1112,54 @@ function App() {
           <div className="section-header"><DollarSign size={16} /><h2>Competencia: Posicionamiento de precios</h2></div>
           {compAnalytics ? (
             <>
+              {/* Search box for SKU drill-down */}
+              <div className="comp-search">
+                <Search size={15} />
+                <input type="text" placeholder="Buscar SKU o producto..." value={search} onChange={e => setSearch(e.target.value)} />
+              </div>
+
+              {/* SKU detail view when searching */}
+              {search.length >= 3 && (() => {
+                const q = search.toLowerCase()
+                const matches = compAnalytics.overpriced.concat(compAnalytics.underpriced || [])
+                  .filter(p => p.parent_sku?.toLowerCase().includes(q))
+                const summaryItems = (compAnalytics._all_items || summary?.items || [])
+                  .filter(it => it.parent_sku?.toLowerCase().includes(q))
+                // Cross-ref with full competitor data from the summary endpoint
+                const skuActions = actions.filter(a => a.parent_sku?.toLowerCase().includes(q))
+                if (matches.length > 0 || skuActions.length > 0) return (
+                  <div className="comp-section">
+                    <h3>Detalle: {matches.length || skuActions.length} SKUs encontrados</h3>
+                    {matches.slice(0, 10).map((p, i) => (
+                      <div key={i} className="comp-sku-card">
+                        <div className="comp-sku-header">
+                          <span className="sku-code">{p.parent_sku}</span>
+                          <span className={`comp-position comp-position--${p.position}`}>{p.position === 'expensive' ? 'Más caro' : p.position === 'cheaper' ? 'Más barato' : 'Paridad'}</span>
+                        </div>
+                        <div className="comp-sku-prices">
+                          <div className="comp-sku-price"><span className="comp-sku-plabel">Nuestro</span><span className="mono">${p.our_price?.toLocaleString()}</span></div>
+                          <div className="comp-sku-price"><span className="comp-sku-plabel">Min competidor</span><span className="mono">${p.comp_min?.toLocaleString()}</span></div>
+                          <div className="comp-sku-price"><span className="comp-sku-plabel">Promedio</span><span className="mono">${p.comp_avg?.toLocaleString()}</span></div>
+                          <div className="comp-sku-price"><span className="comp-sku-plabel">Brecha</span><span className={p.gap_pct > 5 ? 'comp-gap--bad' : p.gap_pct < -5 ? 'comp-gap--good' : ''}>{p.gap_pct > 0 ? '+' : ''}{p.gap_pct}%</span></div>
+                        </div>
+                        {p.competitors?.length > 0 && (
+                          <div className="comp-sku-competitors">
+                            {p.competitors.sort((a,b) => a.price - b.price).map((c, j) => (
+                              <div key={j} className="comp-sku-comp">
+                                <span className="comp-sku-cname">{c.name}</span>
+                                <span className="mono">${c.price?.toLocaleString()}</span>
+                                <span className={c.in_stock ? 'comp-stock--yes' : 'comp-stock--no'}>{c.in_stock ? 'En stock' : 'Sin stock'}</span>
+                                {c.url && <a href={c.url} target="_blank" rel="noopener noreferrer" className="comp-sku-link">Ver</a>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
+                return null
+              })()}
               <div className="comp-kpis">
                 <div className="comp-kpi">
                   <div className="comp-kpi-value">{compAnalytics.position_summary.avg_price_index.toFixed(2)}x</div>
