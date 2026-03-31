@@ -50,12 +50,15 @@ def prepare_elasticity_data(brand: str):
     sales = txn[txn["cantidad"] > 0].copy()
     sales["week"] = sales["fecha"].dt.to_period("W").dt.start_time
 
-    # Tag click & collect — use retail-only prices for elasticity
-    # (C&C prices reflect ecomm discounts, not store price sensitivity)
+    # Tag click & collect + coupon transactions — exclude from price calculations
+    # (C&C = ecomm pricing; coupons = influencer/employee/Entel discounts — not store price sensitivity)
     sales["is_cc"] = (
         (sales["tipo_entrega"] == "Retiro en Tienda") if "tipo_entrega" in sales.columns else False
     )
-    retail = sales[~sales["is_cc"]]
+    sales["has_coupon"] = (
+        sales["codigo_descuento"].notna() & (sales["codigo_descuento"] != "")
+    ) if "codigo_descuento" in sales.columns else False
+    retail = sales[~sales["is_cc"] & ~sales["has_coupon"]]
 
     # Effective price per unit (retail-only to avoid ecomm discount contamination)
     retail = retail.copy()

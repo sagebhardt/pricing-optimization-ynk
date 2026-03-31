@@ -67,7 +67,13 @@ def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
         (sales["tipo_entrega"] == "Retiro en Tienda") if "tipo_entrega" in sales.columns else False
     )
 
-    # Weekly sales aggregation — volume from ALL channels (markdown impacts both)
+    # Tag coupon transactions (influencer, employee, Entel, first-purchase codes)
+    # These give artificial discounts that don't reflect true store pricing
+    sales["has_coupon"] = (
+        sales["codigo_descuento"].notna() & (sales["codigo_descuento"] != "")
+    ) if "codigo_descuento" in sales.columns else False
+
+    # Weekly sales aggregation — volume from ALL channels (demand is real)
     weekly = (
         sales.groupby(["sku", "centro", "week"])
         .agg(
@@ -79,12 +85,16 @@ def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    # Price features from RETAIL-ONLY transactions (prevents ecomm-specific discounts
-    # like "15% first purchase" from contaminating store price signal)
-    retail_sales = sales[~sales["is_click_collect"]]
-    if len(retail_sales) > 0:
+    # Price features from CLEAN transactions only:
+    # Exclude C&C (ecomm pricing) + coupon codes (influencer, employee, Entel discounts)
+    # These contaminate price signal — 87% of BAMERS coupon weeks had >10% price distortion
+    clean_sales = sales[~sales["is_click_collect"] & ~sales["has_coupon"]]
+    n_excluded = len(sales) - len(clean_sales)
+    if n_excluded > 0:
+        print(f"    Price features: excluded {n_excluded:,} txn ({n_excluded/len(sales)*100:.1f}%) — C&C + coupons")
+    if len(clean_sales) > 0:
         retail_prices = (
-            retail_sales.groupby(["sku", "centro", "week"])
+            clean_sales.groupby(["sku", "centro", "week"])
             .agg(
                 total_discount=("descuento", "sum"),
                 total_list_value=("precio_lista", "sum"),
