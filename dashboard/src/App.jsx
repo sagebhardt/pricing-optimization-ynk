@@ -379,7 +379,7 @@ function ActionRow({ action, status, onDecide, onManual, onChainView, canApprove
               <span className="ecomm-price mono">{clp(action.ecomm_price)}</span>
               {action.ecomm_price_gap_pct != null && Math.abs(action.ecomm_price_gap_pct) > 2 && (
                 <span className={`ecomm-gap ${action.ecomm_price_gap_pct > 0 ? 'ecomm-gap--higher' : 'ecomm-gap--lower'}`}>
-                  {action.ecomm_price_gap_pct > 0 ? 'Tienda' : 'Online'} {Math.abs(action.ecomm_price_gap_pct).toFixed(0)}% {action.ecomm_price_gap_pct > 0 ? 'm\u00e1s caro' : 'm\u00e1s barato'}
+                  {action.ecomm_price_gap_pct > 0 ? 'Tienda' : 'Online'} {Math.abs(action.ecomm_price_gap_pct).toFixed(0)}% {action.ecomm_price_gap_pct > 0 ? 'más caro' : 'más barato'}
                 </span>
               )}
               {action.ecomm_velocity != null && (
@@ -1279,12 +1279,12 @@ function App() {
               <div className="comp-kpis">
                 <div className="comp-kpi">
                   <div className="comp-kpi-value">{compAnalytics.position_summary.avg_price_index.toFixed(2)}x</div>
-                  <div className="comp-kpi-label">{'\u00cd'}ndice de precio</div>
-                  <div className="comp-kpi-desc">{compAnalytics.position_summary.avg_price_index > 1.02 ? 'M\u00e1s caro que el mercado' : compAnalytics.position_summary.avg_price_index < 0.98 ? 'M\u00e1s barato que el mercado' : 'Alineado con el mercado'}</div>
+                  <div className="comp-kpi-label">Índice de precio</div>
+                  <div className="comp-kpi-desc">{compAnalytics.position_summary.avg_price_index > 1.02 ? 'Más caro que el mercado' : compAnalytics.position_summary.avg_price_index < 0.98 ? 'Más barato que el mercado' : 'Alineado con el mercado'}</div>
                 </div>
                 <div className="comp-kpi">
                   <div className="comp-kpi-value comp-kpi--green">{compAnalytics.position_summary.cheaper_pct}%</div>
-                  <div className="comp-kpi-label">M\u00e1s baratos</div>
+                  <div className="comp-kpi-label">Más baratos</div>
                   <div className="comp-kpi-desc">{compAnalytics.position_summary.cheaper} productos</div>
                 </div>
                 <div className="comp-kpi">
@@ -1294,7 +1294,7 @@ function App() {
                 </div>
                 <div className="comp-kpi">
                   <div className="comp-kpi-value comp-kpi--red">{compAnalytics.position_summary.expensive_pct}%</div>
-                  <div className="comp-kpi-label">M\u00e1s caros</div>
+                  <div className="comp-kpi-label">Más caros</div>
                   <div className="comp-kpi-desc">{compAnalytics.position_summary.expensive} productos</div>
                 </div>
               </div>
@@ -1304,7 +1304,7 @@ function App() {
                   <h3>Por competidor</h3>
                   <div className="comp-table">
                     <div className="comp-table-header">
-                      <span>Competidor</span><span>Productos</span><span>M\u00e1s barato</span><span>Brecha promedio</span>
+                      <span>Competidor</span><span>Productos</span><span>Más barato</span><span>Brecha promedio</span>
                     </div>
                     {compAnalytics.by_competitor.map(c => (
                       <div key={c.name} className="comp-table-row">
@@ -1320,7 +1320,7 @@ function App() {
 
               {compAnalytics.overpriced?.length > 0 && (
                 <div className="comp-section">
-                  <h3>Oportunidades: donde somos m\u00e1s caros</h3>
+                  <h3>Oportunidades: donde somos más caros</h3>
                   <div className="comp-table">
                     <div className="comp-table-header comp-table-header--6">
                       <span>SKU</span><span>Nuestro</span><span>Min comp.</span><span>Brecha</span><span>Competidor</span><span>N</span>
@@ -1341,7 +1341,7 @@ function App() {
 
               {compAnalytics.underpriced?.length > 0 && (
                 <div className="comp-section">
-                  <h3>Pricing power: donde somos m\u00e1s baratos</h3>
+                  <h3>Pricing power: donde somos más baratos</h3>
                   <div className="comp-table">
                     <div className="comp-table-header comp-table-header--6">
                       <span>SKU</span><span>Nuestro</span><span>Min comp.</span><span>Brecha</span><span>Competidor</span><span>N</span>
@@ -1375,17 +1375,17 @@ function App() {
                     {performanceData.lift_capture_rate != null ? `${performanceData.lift_capture_rate}%` : '\u2014'}
                   </div>
                   <div className="perf-kpi-label">Lift capturado</div>
-                  <div className="perf-kpi-desc">% del impacto predicho que se materializ\u00f3</div>
+                  <div className="perf-kpi-desc">% del impacto predicho que se materializó</div>
                 </div>
                 <div className="perf-kpi">
                   <div className="perf-kpi-value">{performanceData.pct_direction_correct != null ? `${performanceData.pct_direction_correct}%` : '\u2014'}</div>
-                  <div className="perf-kpi-label">Direcci\u00f3n correcta</div>
-                  <div className="perf-kpi-desc">% de decisiones donde el modelo acert\u00f3 la direcci\u00f3n</div>
+                  <div className="perf-kpi-label">Dirección correcta</div>
+                  <div className="perf-kpi-desc">% de decisiones donde el modelo acertó la dirección</div>
                 </div>
                 <div className="perf-kpi">
                   <div className="perf-kpi-value">{performanceData.median_velocity_error_pct != null ? `${performanceData.median_velocity_error_pct > 0 ? '+' : ''}${performanceData.median_velocity_error_pct}%` : '\u2014'}</div>
                   <div className="perf-kpi-label">Error mediana velocidad</div>
-                  <div className="perf-kpi-desc">Error t\u00edpico en predicci\u00f3n de velocidad</div>
+                  <div className="perf-kpi-desc">Error típico en predicción de velocidad</div>
                 </div>
                 <div className="perf-kpi">
                   <div className="perf-kpi-value">{performanceData.weeks_evaluated || 0}</div>
@@ -1399,7 +1399,7 @@ function App() {
                   <h3>Por nivel de confianza</h3>
                   <div className="perf-table">
                     <div className="perf-table-header">
-                      <span>Tier</span><span>Decisiones</span><span>Direcci\u00f3n correcta</span><span>Error velocidad</span>
+                      <span>Tier</span><span>Decisiones</span><span>Dirección correcta</span><span>Error velocidad</span>
                     </div>
                     {Object.entries(performanceData.by_confidence).sort((a,b) => b[1].count - a[1].count).map(([tier, d]) => (
                       <div key={tier} className="perf-table-row">
@@ -1415,10 +1415,10 @@ function App() {
 
               {performanceData.by_action_type && Object.keys(performanceData.by_action_type).length > 0 && (
                 <div className="perf-section">
-                  <h3>Por tipo de acci\u00f3n</h3>
+                  <h3>Por tipo de acción</h3>
                   <div className="perf-table">
                     <div className="perf-table-header">
-                      <span>Tipo</span><span>Decisiones</span><span>Direcci\u00f3n correcta</span><span>Error velocidad</span>
+                      <span>Tipo</span><span>Decisiones</span><span>Dirección correcta</span><span>Error velocidad</span>
                     </div>
                     {Object.entries(performanceData.by_action_type).map(([type, d]) => (
                       <div key={type} className="perf-table-row">
@@ -1434,7 +1434,7 @@ function App() {
 
               {outcomeDetails.length > 0 && (
                 <div className="perf-section">
-                  <h3>Detalle por decisi\u00f3n ({outcomeDetails.length})</h3>
+                  <h3>Detalle por decisión ({outcomeDetails.length})</h3>
                   <div className="perf-table perf-table--detail">
                     <div className="perf-table-header">
                       <span>SKU</span><span>Tienda</span><span>Vel. pred.</span><span>Vel. real</span><span>Error</span><span>Conf.</span>
@@ -1456,7 +1456,7 @@ function App() {
           ) : (
             <div className="empty-state">
               Las decisiones necesitan 1-2 semanas de datos para evaluar el rendimiento.<br/>
-              Aprueba recomendaciones y el sistema comparar\u00e1 predicciones vs resultados reales.
+              Aprueba recomendaciones y el sistema comparará predicciones vs resultados reales.
             </div>
           )}
         </div>
