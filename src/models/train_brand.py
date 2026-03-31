@@ -27,15 +27,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-EXCLUDE_COLS = [
-    "sku", "centro", "week", "codigo_padre", "first_sale_date",
-    "will_discount_4w", "future_max_disc_4w", "future_velocity_2w", "velocity_lift",
-    "color1", "tercera_jerarquia",
-    "should_reprice", "optimal_disc_margin", "optimal_profit",
-    "click_collect_units", "instore_units", "instore_velocity_4w", "click_collect_ratio",
-]
-
-CATEGORICAL_COLS = ["primera_jerarquia", "segunda_jerarquia", "genero", "grupo_etario"]
+from src.models.weekly_pricing_brand import EXCLUDE_COLS, CATEGORICAL_COLS
 
 # Brand-specific hyperparameter overrides.
 # BELSPORT: 2.8M samples with 66 heterogeneous stores — needs more capacity

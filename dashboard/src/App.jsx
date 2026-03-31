@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2, Store, Tag, DollarSign, Target } from 'lucide-react'
+import { Search, Download, TrendingUp, TrendingDown, ChevronDown, ChevronUp, Check, X, AlertTriangle, ArrowUpRight, ArrowDownRight, Filter, ClipboardCopy, Clock, LogOut, Settings, UserPlus, Trash2, BarChart2, Store, Tag, DollarSign, Target, Globe } from 'lucide-react'
 import AnalyticsDrawer from './AnalyticsDrawer'
 import StoreSidebar from './StoreSidebar'
 import ManualPriceModal from './ManualPriceModal'
@@ -1089,6 +1089,9 @@ function App() {
         <button className={`vt-btn ${viewMode === 'performance' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('performance')}>
           <Target size={13} /> Rendimiento
         </button>
+        <button className={`vt-btn ${viewMode === 'producto' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('producto')}>
+          <BarChart2 size={13} /> Producto
+        </button>
         <button className={`vt-btn ${viewMode === 'competencia' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('competencia')}>
           <DollarSign size={13} /> Competencia
         </button>
@@ -1107,7 +1110,106 @@ function App() {
       )}
       <div className="main-content">
 
-      {viewMode === 'competencia' ? (
+      {viewMode === 'producto' ? (() => {
+        // Group actions by parent_sku, split into B&M and Ecom channels
+        const isEcomm = (store) => String(store).toUpperCase().startsWith('AB')
+        const grouped = {}
+        const filteredActions = actions.filter(a => {
+          if (search && !a.product?.toLowerCase().includes(search.toLowerCase()) && !a.parent_sku?.toLowerCase().includes(search.toLowerCase())) return false
+          return true
+        })
+        filteredActions.forEach(a => {
+          const sku = a.parent_sku
+          if (!grouped[sku]) grouped[sku] = { sku, product: a.product, category: a.category, subcategory: a.subcategory, vendor_brand: a.vendor_brand, bm: [], ecom: [] }
+          const channel = isEcomm(a.store) ? 'ecom' : 'bm'
+          grouped[sku][channel].push(a)
+        })
+        const skuList = Object.values(grouped)
+          .filter(g => g.bm.length > 0 || g.ecom.length > 0)
+          .sort((a, b) => {
+            const aRev = [...a.bm, ...a.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
+            const bRev = [...b.bm, ...b.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
+            return bRev - aRev
+          })
+
+        const median = arr => { const s = arr.slice().sort((a,b) => a-b); return s[Math.floor(s.length/2)] || 0 }
+        const clp = n => n ? '$' + Math.round(n).toLocaleString('es-CL') : '—'
+
+        return (
+          <div className="prod-page">
+            <div className="comp-search">
+              <Search size={15} />
+              <input type="text" placeholder="Buscar SKU o producto..." value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <div className="prod-list">
+              {skuList.slice(0, 50).map(g => {
+                const bmPrices = g.bm.map(a => a.current_price).filter(Boolean)
+                const bmRec = g.bm.map(a => a.recommended_price).filter(Boolean)
+                const bmVel = g.bm.reduce((s, a) => s + (Number(a.current_velocity) || 0), 0)
+                const bmRev = g.bm.reduce((s, a) => s + (Number(a.rev_delta) || 0), 0)
+                const bmPending = g.bm.filter(a => !decisions[`${a.parent_sku}-${a.store}`]).length
+
+                const ecPrices = g.ecom.map(a => a.current_price).filter(Boolean)
+                const ecRec = g.ecom.map(a => a.recommended_price).filter(Boolean)
+                const ecVel = g.ecom.reduce((s, a) => s + (Number(a.current_velocity) || 0), 0)
+                const ecRev = g.ecom.reduce((s, a) => s + (Number(a.rev_delta) || 0), 0)
+                const ecPending = g.ecom.filter(a => !decisions[`${a.parent_sku}-${a.store}`]).length
+
+                return (
+                  <div key={g.sku} className="prod-card">
+                    <div className="prod-header">
+                      <span className="prod-name">{g.product}</span>
+                      <span className="sku-code">{g.sku}</span>
+                      {g.vendor_brand && <span className="prod-vendor">{g.vendor_brand}</span>}
+                    </div>
+                    <div className="prod-channels">
+                      {g.bm.length > 0 && (
+                        <div className="prod-channel">
+                          <div className="prod-ch-label"><Store size={12} /> B&M ({g.bm.length} tiendas)</div>
+                          <div className="prod-ch-row">
+                            <span className="prod-ch-price">{clp(median(bmPrices))} → {clp(median(bmRec))}</span>
+                            <span className="prod-ch-vel">{bmVel.toFixed(1)} u/sem</span>
+                            <span className={`prod-ch-rev ${bmRev >= 0 ? 'prod-ch-rev--pos' : 'prod-ch-rev--neg'}`}>{bmRev >= 0 ? '+' : ''}{clpCompact(bmRev)}</span>
+                            {canApprove && bmPending > 0 && (
+                              <button className="prod-ch-btn" onClick={() => {
+                                g.bm.forEach(a => {
+                                  const key = `${a.parent_sku}-${a.store}`
+                                  if (!decisions[key]) handleDecision(a.parent_sku, a.store, 'approved')
+                                })
+                              }}>Aprobar B&M ({bmPending})</button>
+                            )}
+                            {bmPending === 0 && <span className="prod-ch-done"><Check size={12} /></span>}
+                          </div>
+                        </div>
+                      )}
+                      {g.ecom.length > 0 && (
+                        <div className="prod-channel prod-channel--ecom">
+                          <div className="prod-ch-label"><Globe size={12} /> Ecom</div>
+                          <div className="prod-ch-row">
+                            <span className="prod-ch-price">{clp(median(ecPrices))} → {clp(median(ecRec))}</span>
+                            <span className="prod-ch-vel">{ecVel.toFixed(1)} u/sem</span>
+                            <span className={`prod-ch-rev ${ecRev >= 0 ? 'prod-ch-rev--pos' : 'prod-ch-rev--neg'}`}>{ecRev >= 0 ? '+' : ''}{clpCompact(ecRev)}</span>
+                            {canApprove && ecPending > 0 && (
+                              <button className="prod-ch-btn prod-ch-btn--ecom" onClick={() => {
+                                g.ecom.forEach(a => {
+                                  const key = `${a.parent_sku}-${a.store}`
+                                  if (!decisions[key]) handleDecision(a.parent_sku, a.store, 'approved')
+                                })
+                              }}>Aprobar Ecom ({ecPending})</button>
+                            )}
+                            {ecPending === 0 && <span className="prod-ch-done"><Check size={12} /></span>}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {skuList.length > 50 && <div className="empty-state">Mostrando 50 de {skuList.length} productos. Usa el buscador para filtrar.</div>}
+          </div>
+        )
+      })() : viewMode === 'competencia' ? (
         <div className="comp-page">
           <div className="section-header"><DollarSign size={16} /><h2>Competencia: Posicionamiento de precios</h2></div>
           {compAnalytics ? (
