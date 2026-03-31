@@ -50,20 +50,32 @@ def prepare_elasticity_data(brand: str):
     sales = txn[txn["cantidad"] > 0].copy()
     sales["week"] = sales["fecha"].dt.to_period("W").dt.start_time
 
-    # Effective price per unit
-    sales["effective_price"] = sales["precio_final"] / sales["cantidad"]
+    # Tag click & collect — use retail-only prices for elasticity
+    # (C&C prices reflect ecomm discounts, not store price sensitivity)
+    sales["is_cc"] = (
+        (sales["tipo_entrega"] == "Retiro en Tienda") if "tipo_entrega" in sales.columns else False
+    )
+    retail = sales[~sales["is_cc"]]
 
-    # Weekly aggregation per SKU-store
-    weekly = (
+    # Effective price per unit (retail-only to avoid ecomm discount contamination)
+    retail = retail.copy()
+    retail["effective_price"] = retail["precio_final"] / retail["cantidad"]
+
+    # Weekly volume from ALL channels (demand is real regardless of source)
+    vol = (
         sales.groupby(["sku", "centro", "week"])
-        .agg(
-            units=("cantidad", "sum"),
-            avg_price=("effective_price", "mean"),
-            avg_list_price=("precio_lista", "mean"),
-            txn_count=("folio", "nunique"),
-        )
+        .agg(units=("cantidad", "sum"), txn_count=("folio", "nunique"))
         .reset_index()
     )
+
+    # Weekly prices from RETAIL-ONLY
+    prices = (
+        retail.groupby(["sku", "centro", "week"])
+        .agg(avg_price=("effective_price", "mean"), avg_list_price=("precio_lista", "mean"))
+        .reset_index()
+    )
+
+    weekly = vol.merge(prices, on=["sku", "centro", "week"], how="inner")
 
     # Add product hierarchy
     product_map = products[["material", "codigo_padre", "primera_jerarquia",
