@@ -247,6 +247,125 @@ def _load_competitor_summary_impl(brand: str) -> dict:
     }
 
 
+def load_competitor_analytics(brand: str) -> dict:
+    """Load enriched competitor analytics with price positioning."""
+    return _cached(f"comp_analytics:{brand}", lambda: _load_comp_analytics_impl(brand), ttl=3600)
+
+
+def _load_comp_analytics_impl(brand: str) -> dict:
+    import pandas as pd
+    import numpy as np
+
+    # Load competitor prices
+    summary = load_competitor_summary(brand)
+    if not summary.get("items"):
+        return {"available": False}
+
+    # Load our pricing actions to cross-reference
+    actions_data = load_pricing_actions(brand)
+    our_items = actions_data.get("items", [])
+    if not our_items:
+        return {"available": False}
+
+    # Build our price lookup: parent_sku → median current price
+    our_prices = {}
+    for a in our_items:
+        sku = a.get("parent_sku", "")
+        price = a.get("current_price", 0)
+        if sku and price > 0:
+            if sku not in our_prices:
+                our_prices[sku] = []
+            our_prices[sku].append(price)
+    our_median = {k: int(sorted(v)[len(v)//2]) for k, v in our_prices.items()}
+
+    # Build competitor comparison per product
+    products = []
+    cheaper_count = 0
+    parity_count = 0
+    expensive_count = 0
+    by_competitor = {}
+
+    for item in summary["items"]:
+        sku = item["parent_sku"]
+        our_price = our_median.get(sku)
+        if not our_price:
+            continue
+
+        comp_min = min(c["price"] for c in item["competitors"])
+        comp_avg = int(sum(c["price"] for c in item["competitors"]) / len(item["competitors"]))
+        gap_pct = round((our_price - comp_min) / our_price * 100, 1)
+
+        # Classify position
+        if gap_pct > 5:
+            position = "expensive"
+            expensive_count += 1
+        elif gap_pct < -5:
+            position = "cheaper"
+            cheaper_count += 1
+        else:
+            position = "parity"
+            parity_count += 1
+
+        cheapest_site = min(item["competitors"], key=lambda c: c["price"])["name"]
+
+        # Track per-competitor stats
+        for c in item["competitors"]:
+            name = c["name"]
+            if name not in by_competitor:
+                by_competitor[name] = {"products": 0, "cheapest_count": 0, "avg_gap_sum": 0}
+            by_competitor[name]["products"] += 1
+            c_gap = (our_price - c["price"]) / our_price * 100
+            by_competitor[name]["avg_gap_sum"] += c_gap
+            if c["price"] <= comp_min * 1.02:
+                by_competitor[name]["cheapest_count"] += 1
+
+        products.append({
+            "parent_sku": sku,
+            "our_price": our_price,
+            "comp_min": comp_min,
+            "comp_avg": comp_avg,
+            "gap_pct": gap_pct,
+            "position": position,
+            "cheapest_site": cheapest_site,
+            "n_competitors": len(item["competitors"]),
+        })
+
+    total = len(products)
+    if total == 0:
+        return {"available": False}
+
+    # Per-competitor summary
+    comp_breakdown = []
+    for name, stats in sorted(by_competitor.items(), key=lambda x: -x[1]["products"]):
+        comp_breakdown.append({
+            "name": name,
+            "products": stats["products"],
+            "cheapest_pct": round(stats["cheapest_count"] / stats["products"] * 100) if stats["products"] > 0 else 0,
+            "avg_gap_pct": round(stats["avg_gap_sum"] / stats["products"], 1) if stats["products"] > 0 else 0,
+        })
+
+    # Sort products by gap (most overpriced first)
+    products.sort(key=lambda x: -x["gap_pct"])
+
+    return {
+        "available": True,
+        "scraped_at": summary.get("scraped_at"),
+        "total_products": total,
+        "position_summary": {
+            "cheaper": cheaper_count,
+            "parity": parity_count,
+            "expensive": expensive_count,
+            "cheaper_pct": round(cheaper_count / total * 100),
+            "parity_pct": round(parity_count / total * 100),
+            "expensive_pct": round(expensive_count / total * 100),
+            "avg_price_index": round(sum(p["our_price"] for p in products) / sum(p["comp_avg"] for p in products), 3) if products else 1.0,
+        },
+        "by_competitor": comp_breakdown,
+        "overpriced": products[:15],
+        "underpriced": list(reversed(products[-10:])),
+    }
+
+
 # ── Model metadata (read-only) ───────────────────────────────────────────────
 
 def load_model_info(brand: str) -> dict:

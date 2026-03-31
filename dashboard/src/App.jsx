@@ -528,6 +528,7 @@ function App() {
   const [actions, setActions] = useState([])
   const [alerts, setAlerts] = useState([])
   const [crossStoreAlerts, setCrossStoreAlerts] = useState([])
+  const [compAnalytics, setCompAnalytics] = useState(null)
   const [performanceData, setPerformanceData] = useState(null)
   const [outcomeDetails, setOutcomeDetails] = useState([])
   const [auditLog, setAuditLog] = useState([])
@@ -667,7 +668,10 @@ function App() {
       setActions(ad.items || [])
       setAlerts(al.items || [])
       setCrossStoreAlerts(cs.items || [])
-      // Fetch performance data
+      // Fetch performance + competitor analytics
+      authFetch(`/analytics/competitors/${b.id}`).then(r => r.json()).then(ca => {
+        setCompAnalytics(ca?.available ? ca : null)
+      }).catch(() => {})
       authFetch(`/analytics/${b.id}`).then(r => r.json()).then(an => {
         setPerformanceData(an?.prediccion_vs_real || null)
       }).catch(() => {})
@@ -1085,6 +1089,9 @@ function App() {
         <button className={`vt-btn ${viewMode === 'performance' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('performance')}>
           <Target size={13} /> Rendimiento
         </button>
+        <button className={`vt-btn ${viewMode === 'competencia' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('competencia')}>
+          <DollarSign size={13} /> Competencia
+        </button>
       </div>
 
       <div className={`dashboard-body ${viewMode !== 'list' ? 'dashboard-body--sidebar' : ''}`}>
@@ -1100,7 +1107,100 @@ function App() {
       )}
       <div className="main-content">
 
-      {viewMode === 'performance' ? (
+      {viewMode === 'competencia' ? (
+        <div className="comp-page">
+          <div className="section-header"><DollarSign size={16} /><h2>Competencia: Posicionamiento de precios</h2></div>
+          {compAnalytics ? (
+            <>
+              <div className="comp-kpis">
+                <div className="comp-kpi">
+                  <div className="comp-kpi-value">{compAnalytics.position_summary.avg_price_index.toFixed(2)}x</div>
+                  <div className="comp-kpi-label">{'\u00cd'}ndice de precio</div>
+                  <div className="comp-kpi-desc">{compAnalytics.position_summary.avg_price_index > 1.02 ? 'M\u00e1s caro que el mercado' : compAnalytics.position_summary.avg_price_index < 0.98 ? 'M\u00e1s barato que el mercado' : 'Alineado con el mercado'}</div>
+                </div>
+                <div className="comp-kpi">
+                  <div className="comp-kpi-value comp-kpi--green">{compAnalytics.position_summary.cheaper_pct}%</div>
+                  <div className="comp-kpi-label">M\u00e1s baratos</div>
+                  <div className="comp-kpi-desc">{compAnalytics.position_summary.cheaper} productos</div>
+                </div>
+                <div className="comp-kpi">
+                  <div className="comp-kpi-value">{compAnalytics.position_summary.parity_pct}%</div>
+                  <div className="comp-kpi-label">Paridad</div>
+                  <div className="comp-kpi-desc">{compAnalytics.position_summary.parity} productos</div>
+                </div>
+                <div className="comp-kpi">
+                  <div className="comp-kpi-value comp-kpi--red">{compAnalytics.position_summary.expensive_pct}%</div>
+                  <div className="comp-kpi-label">M\u00e1s caros</div>
+                  <div className="comp-kpi-desc">{compAnalytics.position_summary.expensive} productos</div>
+                </div>
+              </div>
+
+              {compAnalytics.by_competitor?.length > 0 && (
+                <div className="comp-section">
+                  <h3>Por competidor</h3>
+                  <div className="comp-table">
+                    <div className="comp-table-header">
+                      <span>Competidor</span><span>Productos</span><span>M\u00e1s barato</span><span>Brecha promedio</span>
+                    </div>
+                    {compAnalytics.by_competitor.map(c => (
+                      <div key={c.name} className="comp-table-row">
+                        <span style={{fontWeight: 600}}>{c.name}</span>
+                        <span>{c.products}</span>
+                        <span>{c.cheapest_pct}%</span>
+                        <span className={c.avg_gap_pct > 5 ? 'comp-gap--bad' : c.avg_gap_pct < -5 ? 'comp-gap--good' : ''}>{c.avg_gap_pct > 0 ? '+' : ''}{c.avg_gap_pct}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {compAnalytics.overpriced?.length > 0 && (
+                <div className="comp-section">
+                  <h3>Oportunidades: donde somos m\u00e1s caros</h3>
+                  <div className="comp-table">
+                    <div className="comp-table-header comp-table-header--6">
+                      <span>SKU</span><span>Nuestro</span><span>Min comp.</span><span>Brecha</span><span>Competidor</span><span>N</span>
+                    </div>
+                    {compAnalytics.overpriced.filter(p => p.gap_pct > 0).map((p, i) => (
+                      <div key={i} className="comp-table-row comp-table-row--6">
+                        <span className="sku-code">{p.parent_sku?.slice(0, 14)}</span>
+                        <span className="mono">${p.our_price?.toLocaleString()}</span>
+                        <span className="mono">${p.comp_min?.toLocaleString()}</span>
+                        <span className="comp-gap--bad">+{p.gap_pct}%</span>
+                        <span>{p.cheapest_site}</span>
+                        <span>{p.n_competitors}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {compAnalytics.underpriced?.length > 0 && (
+                <div className="comp-section">
+                  <h3>Pricing power: donde somos m\u00e1s baratos</h3>
+                  <div className="comp-table">
+                    <div className="comp-table-header comp-table-header--6">
+                      <span>SKU</span><span>Nuestro</span><span>Min comp.</span><span>Brecha</span><span>Competidor</span><span>N</span>
+                    </div>
+                    {compAnalytics.underpriced.filter(p => p.gap_pct < 0).map((p, i) => (
+                      <div key={i} className="comp-table-row comp-table-row--6">
+                        <span className="sku-code">{p.parent_sku?.slice(0, 14)}</span>
+                        <span className="mono">${p.our_price?.toLocaleString()}</span>
+                        <span className="mono">${p.comp_min?.toLocaleString()}</span>
+                        <span className="comp-gap--good">{p.gap_pct}%</span>
+                        <span>{p.cheapest_site}</span>
+                        <span>{p.n_competitors}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="empty-state">Sin datos de competencia a\u00fan. Ejecuta el pipeline para obtener precios de competidores.</div>
+          )}
+        </div>
+      ) : viewMode === 'performance' ? (
         <div className="perf-page">
           <div className="section-header"><Target size={16} /><h2>Rendimiento: {performanceData?.available ? `${performanceData.decisions_evaluated} decisiones evaluadas` : 'Sin datos aún'}</h2></div>
           {performanceData?.available ? (

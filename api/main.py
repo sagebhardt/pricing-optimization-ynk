@@ -217,6 +217,15 @@ def get_cross_store_alerts(brand: Optional[str] = Query(None), min_price_spread:
     }
 
 
+@app.get("/analytics/competitors/{brand}")
+def get_competitor_analytics(brand: str, request: Request):
+    """Advanced competitor pricing analytics."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+    return storage.load_competitor_analytics(brand)
+
+
 @app.get("/model/info")
 def get_model_info(brand: Optional[str] = Query(None)):
     """Get model metadata and performance metrics per brand."""
