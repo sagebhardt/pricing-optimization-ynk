@@ -24,7 +24,12 @@ function StoreRow({ item, active, onSelect, onApprove, canApprove }) {
          className={`sb-row ${active ? 'sb-row--active' : ''} ${allDone ? 'sb-row--done' : ''}`}
          onClick={() => onSelect(item.name)}>
       <div className="sb-row-main">
-        <span className="sb-row-name">{item.name}</span>
+        <span className="sb-row-name">
+          {item.name}
+          {item.ccCount > 0 && item.ccSum / item.ccCount > 0.2 && (
+            <span className="sb-cc-tag">{Math.round(item.ccSum / item.ccCount * 100)}% C&C</span>
+          )}
+        </span>
         {item.pending > 0 ? (
           <span className={`sb-badge ${item.highCount > 0 ? 'sb-badge--high' : item.medCount > 0 ? 'sb-badge--med' : 'sb-badge--low'}`}>
             {item.pending}

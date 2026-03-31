@@ -120,10 +120,34 @@ export default function ChainViewModal({ parentSku, actions, decisions, brand, w
               </tr>
             </thead>
             <tbody>
-              {storeRows.map(r => (
+              {ecommCount > 0 && bmCount > 0 && (
+                <tr className="cv-group-header"><td colSpan={9}><Globe size={12} /> Online ({ecommCount})</td></tr>
+              )}
+              {storeRows.filter(r => r.channel === 'ecomm').map(r => (
                 <tr key={r.key} className={r.status ? `cv-row--${r.status}` : ''}>
                   <td className="cv-store">{r.store_name || r.store}</td>
-                  <td><span className={`cv-channel cv-channel--${r.channel}`}>{r.channel === 'ecomm' ? 'EC' : 'B&M'}</span></td>
+                  <td><span className={`cv-channel cv-channel--${r.channel}`}>EC</span></td>
+                  <td className="cv-mono">{clp(r.current_price)}</td>
+                  <td className="cv-mono">{clp(r.recommended_price)}</td>
+                  <td>{r.recommended_discount}</td>
+                  <td>{r.current_velocity}{r.click_collect_ratio > 0.1 ? ` (${Math.round(r.click_collect_ratio*100)}% C&C)` : ''}</td>
+                  <td className="cv-mono" style={{color: Number(r.rev_delta) >= 0 ? 'var(--green-600)' : 'var(--red-600)'}}>{clpCompact(r.rev_delta)}</td>
+                  <td>{r.margin_pct != null ? `${r.margin_pct}%` : '\u2014'}</td>
+                  <td>
+                    {r.status === 'approved' && <span className="cv-status cv-status--approved"><Check size={10} /> OK</span>}
+                    {r.status === 'rejected' && <span className="cv-status cv-status--rejected"><X size={10} /></span>}
+                    {r.status === 'manual' && <span className="cv-status cv-status--manual">Manual</span>}
+                    {!r.status && <span className="cv-status cv-status--pending">Pendiente</span>}
+                  </td>
+                </tr>
+              ))}
+              {ecommCount > 0 && bmCount > 0 && (
+                <tr className="cv-group-header"><td colSpan={9}><Store size={12} /> Tiendas ({bmCount})</td></tr>
+              )}
+              {storeRows.filter(r => r.channel === 'bm').map(r => (
+                <tr key={r.key} className={r.status ? `cv-row--${r.status}` : ''}>
+                  <td className="cv-store">{r.store_name || r.store}</td>
+                  <td><span className={`cv-channel cv-channel--${r.channel}`}>B&M</span></td>
                   <td className="cv-mono">{clp(r.current_price)}</td>
                   <td className="cv-mono">{clp(r.recommended_price)}</td>
                   <td>{r.recommended_discount}</td>

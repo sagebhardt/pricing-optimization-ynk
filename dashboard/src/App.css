@@ -176,6 +176,11 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
 .ecomm-gap--higher { background: var(--amber-100); color: var(--amber-700); }
 .ecomm-gap--lower { background: var(--green-100); color: var(--green-700); }
 .ecomm-vel { font-size: 11px; color: var(--slate-500); margin-left: auto; }
+
+/* C&C badges */
+.cc-badge { font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--blue-50); color: var(--blue-600); font-weight: 600; margin-left: 2px; }
+.sb-cc-tag { font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--blue-50); color: var(--blue-600); font-weight: 600; margin-left: 4px; }
+.cv-group-header td { font-size: 11px; font-weight: 600; color: var(--slate-500); padding: 8px 8px 4px; background: var(--slate-50); display: flex; align-items: center; gap: 4px; }
 .dcell-label { display: block; font-size: 10px; font-weight: 500; color: var(--slate-400); text-transform: uppercase; letter-spacing: .04em; }
 .dcell-val { font-size: 13px; font-weight: 500; color: var(--slate-800); }
 .dcell-val.mono { font-family: var(--font-mono); font-size: 12px; }

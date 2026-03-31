@@ -321,6 +321,7 @@ function ActionRow({ action, status, onDecide, onManual, onChainView, canApprove
           <span className="vel-arrow">&rarr;</span>
           <span>{action.expected_velocity}</span>
           <span className="vel-unit">u/sem</span>
+          {action.click_collect_ratio > 0.1 && <span className="cc-badge">{Math.round(action.click_collect_ratio * 100)}% C&C</span>}
         </div>
 
         <div className={`row-delta ${delta >= 0 ? 'row-delta--pos' : 'row-delta--neg'}`}>
@@ -711,7 +712,7 @@ function App() {
     actions.forEach(a => {
       const name = a.store_name || a.store
       if (!name) return
-      if (!map[name]) map[name] = { key: a.store, name, total: 0, pending: 0, decided: 0, highCount: 0, medCount: 0, revDelta: 0 }
+      if (!map[name]) map[name] = { key: a.store, name, total: 0, pending: 0, decided: 0, highCount: 0, medCount: 0, revDelta: 0, ccSum: 0, ccCount: 0 }
       const s = map[name]
       s.total++
       const dec = decisions[`${a.parent_sku}-${a.store}`]
@@ -719,6 +720,7 @@ function App() {
       if (a.urgency === 'HIGH') s.highCount++
       if (a.urgency === 'MEDIUM') s.medCount++
       s.revDelta += Number(a.rev_delta) || 0
+      if (a.click_collect_ratio > 0) { s.ccSum += a.click_collect_ratio; s.ccCount++ }
     })
     return Object.values(map).sort((a, b) => b.pending - a.pending || b.total - a.total)
   }, [actions, decisions])
