@@ -372,6 +372,20 @@ function ActionRow({ action, status, onDecide, onManual, onChainView, canApprove
             {action.margin_pct != null && <div className="dcell"><span className="dcell-label">Margen</span><span className={`dcell-val mono ${action.margin_pct < 20 ? 'margin--danger' : action.margin_pct < 40 ? 'margin--warn' : 'margin--ok'}`}>{action.margin_pct}%</span></div>}
             {action.margin_delta != null && <div className="dcell"><span className="dcell-label">Delta margen/sem</span><span className={`dcell-val mono ${action.margin_delta >= 0 ? 'margin--ok' : 'margin--danger'}`}>{action.margin_delta >= 0 ? '+' : ''}{clpCompact(action.margin_delta)}</span></div>}
           </div>
+          {action.ecomm_price != null && (
+            <div className={`detail-ecomm ${Math.abs(action.ecomm_price_gap_pct || 0) > 5 ? 'detail-ecomm--gap' : ''}`}>
+              <span className="ecomm-label">Online:</span>
+              <span className="ecomm-price mono">{clp(action.ecomm_price)}</span>
+              {action.ecomm_price_gap_pct != null && Math.abs(action.ecomm_price_gap_pct) > 2 && (
+                <span className={`ecomm-gap ${action.ecomm_price_gap_pct > 0 ? 'ecomm-gap--higher' : 'ecomm-gap--lower'}`}>
+                  {action.ecomm_price_gap_pct > 0 ? 'Tienda' : 'Online'} {Math.abs(action.ecomm_price_gap_pct).toFixed(0)}% {action.ecomm_price_gap_pct > 0 ? 'm\u00e1s caro' : 'm\u00e1s barato'}
+                </span>
+              )}
+              {action.ecomm_velocity != null && (
+                <span className="ecomm-vel">{action.ecomm_velocity.toFixed(1)} u/sem online total</span>
+              )}
+            </div>
+          )}
           <div className="detail-reason"><AlertTriangle size={13} /> {action.reasons}</div>
           {onChainView && (
             <button className="detail-chain-btn" onClick={() => onChainView(action.parent_sku)}>

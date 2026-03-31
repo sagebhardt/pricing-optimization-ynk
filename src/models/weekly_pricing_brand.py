@@ -863,8 +863,40 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
     actions_df.drop(columns=["_urgency_sort"], inplace=True)
 
     # Add vendor brand for multi-brand banners
-    from config.vendor_brands import get_vendor_brand
+    from config.vendor_brands import get_vendor_brand, is_ecomm_store
     actions_df["vendor_brand"] = actions_df["parent_sku"].apply(lambda s: get_vendor_brand(s, brand))
+
+    # Attach ecommerce price + true online velocity per parent SKU
+    # (ecomm is a pricing channel that overlays all stores, not just another store)
+    ecomm_rows = parent_agg[parent_agg["centro"].apply(is_ecomm_store)]
+    if len(ecomm_rows) > 0:
+        ecomm_prices = ecomm_rows.groupby("codigo_padre").agg(
+            ecomm_price=("avg_precio_final", "median"),
+            ecomm_discount=("discount_rate", "median"),
+            ecomm_velocity=("velocity_4w", "sum"),
+        ).reset_index().rename(columns={"codigo_padre": "parent_sku"})
+
+        # True online velocity = ecomm delivery + C&C at all stores
+        if "click_collect_units" in parent_agg.columns:
+            cc_velocity = (
+                parent_agg[~parent_agg["centro"].apply(is_ecomm_store)]
+                .groupby("codigo_padre")["click_collect_units"]
+                .sum()
+                .rename("cc_velocity_total")
+                .reset_index()
+                .rename(columns={"codigo_padre": "parent_sku"})
+            )
+            ecomm_prices = ecomm_prices.merge(cc_velocity, on="parent_sku", how="left")
+            ecomm_prices["ecomm_velocity"] = ecomm_prices["ecomm_velocity"] + ecomm_prices["cc_velocity_total"].fillna(0)
+            ecomm_prices.drop(columns=["cc_velocity_total"], inplace=True)
+
+        actions_df = actions_df.merge(ecomm_prices, on="parent_sku", how="left")
+        # Price gap: positive = store is more expensive than ecomm
+        actions_df["ecomm_price_gap_pct"] = np.where(
+            actions_df["ecomm_price"].notna() & (actions_df["ecomm_price"] > 0),
+            ((actions_df["current_price"] - actions_df["ecomm_price"]) / actions_df["current_price"] * 100).round(1),
+            np.nan,
+        )
 
     # Save
     filename = f"pricing_actions_{target_week.date()}"
