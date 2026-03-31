@@ -318,6 +318,15 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - API: `GET /alerts/cross-store?brand=X` — parent-grouped with nested stores array
 - Dashboard: alert cards with price spread, per-store prices, reason badges
 
+## Click & Collect Handling
+- "Retiro en Tienda" = online order picked up at physical store. BOLD: 67% of online demand is C&C.
+- **Velocity**: all channels (retail + C&C) — a markdown affects both (ecomm ≈ store price 54% of time)
+- **Price features**: retail-only transactions — prevents ecomm discount codes (15% first purchase, promos) from contaminating store price signal. 30% of mixed SKU-store-weeks had >5% price contamination before fix.
+- **Pure C&C stores excluded**: BOLD 2019 (99%), BAMERS B609 (100%), BEC2 (98%) — in `EXCLUDE_STORES_PRICING`
+- **Ecomm as channel overlay**: each action row shows online price + gap %. True ecomm velocity = delivery + ALL C&C across stores.
+- **Dashboard**: C&C % badge on velocity, store sidebar tags, chain view groups ecomm first then B&M
+- C&C columns (`click_collect_units`, `instore_units`, `instore_velocity_4w`, `click_collect_ratio`) excluded from model training (in `EXCLUDE_COLS` in both `train_brand.py` and `weekly_pricing_brand.py`)
+
 ## Known Issues
 - Elasticity estimates conflated with markdown effects — consider excluding markdown periods
 - Belsport has no stock table yet (`stock_belsport` doesn't exist) — uses sales proxy for size curve
