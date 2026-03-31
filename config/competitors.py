@@ -4,7 +4,7 @@
 # Each entry is the adapter name used in src/scraping/.
 BRAND_COMPETITORS = {
     "HOKA": ["falabella", "mercadolibre", "hoka_cl", "sparta", "marathon"],
-    "BOLD": ["falabella", "theline", "paris"],  # ripley/nike_cl blocked (403), mercadolibre needs OAuth scope
+    "BOLD": ["falabella", "theline", "paris", "nike_cl"],  # ripley blocked (403), mercadolibre needs OAuth scope
     "BAMERS": ["falabella", "paris"],  # ripley blocked (403), mercadolibre needs OAuth scope
     "OAKLEY": ["falabella", "paris"],
     "BELSPORT": ["falabella", "paris"],

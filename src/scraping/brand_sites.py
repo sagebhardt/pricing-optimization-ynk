@@ -330,6 +330,85 @@ class TheLineScraper(CompetitorScraper):
         return results
 
 
+class NikeClScraper(CompetitorScraper):
+    """nike.cl — VTEX behind Cloudflare, accessed via ZenRows proxy."""
+
+    name = "nike_cl"
+    base_url = "https://www.nike.cl"
+    skip_robots = True
+
+    def __init__(self):
+        super().__init__()
+        import os
+        self._zenrows_key = os.environ.get("ZENROWS_API_KEY", "")
+
+    def search_product(self, product_name, brand, ean11=None):
+        if not self._zenrows_key:
+            return []
+
+        query = f"{brand} {product_name}" if brand else product_name
+        # Use VTEX API through ZenRows (1 credit, no JS render)
+        vtex_url = f"{self.base_url}/api/io/_v/api/intelligent-search/product_search/v2?query={query}&count=10&locale=es-CL"
+
+        import requests as req
+        try:
+            resp = req.get("https://api.zenrows.com/v1/", params={
+                "apikey": self._zenrows_key,
+                "url": vtex_url,
+            }, timeout=30)
+        except Exception:
+            return []
+
+        if resp.status_code != 200:
+            return []
+
+        try:
+            data = resp.json()
+        except Exception:
+            return []
+
+        results = []
+        for p in data.get("products", []):
+            name = p.get("productName", "")
+            p_brand = p.get("brand", "")
+            items = p.get("items", [])
+            if not items:
+                continue
+
+            sellers = items[0].get("sellers", [])
+            if not sellers:
+                continue
+            offer = sellers[0].get("commertialOffer", {})
+            price = int(offer.get("Price", 0))
+            list_price = int(offer.get("ListPrice", 0)) or price
+            stock = offer.get("AvailableQuantity", 0)
+
+            if price <= 0:
+                continue
+
+            method, score = match_product(
+                product_name, brand, name, p_brand, ean_matched=False,
+            )
+            if method == "no_match":
+                continue
+
+            discount = round(1 - price / list_price, 3) if list_price > price else 0.0
+            url = p.get("link", f"{self.base_url}/{p.get('linkText', '')}/p")
+
+            results.append({
+                "competitor_url": url,
+                "comp_price": price,
+                "comp_list_price": list_price,
+                "comp_discount": discount,
+                "comp_in_stock": stock > 0,
+                "matched_name": name,
+                "match_method": method,
+                "match_score": round(score, 3),
+            })
+
+        return results
+
+
 def get_brand_site_scraper(name: str) -> CompetitorScraper:
     """Factory for brand site scrapers."""
     scrapers = {
@@ -337,6 +416,7 @@ def get_brand_site_scraper(name: str) -> CompetitorScraper:
         "sparta": SpartaScraper,
         "marathon": MarathonScraper,
         "theline": TheLineScraper,
+        "nike_cl": NikeClScraper,
     }
     cls = scrapers.get(name)
     if cls is None:
