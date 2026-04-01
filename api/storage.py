@@ -261,11 +261,9 @@ def _load_comp_analytics_impl(brand: str) -> dict:
     if not summary.get("items"):
         return {"available": False}
 
-    # Load our pricing actions to cross-reference
+    # Load our pricing actions to cross-reference (optional — enrich if available)
     actions_data = load_pricing_actions(brand)
     our_items = actions_data.get("items", [])
-    if not our_items:
-        return {"available": False}
 
     # Build our price lookup: parent_sku → median current price
     our_prices = {}
@@ -288,6 +286,10 @@ def _load_comp_analytics_impl(brand: str) -> dict:
     for item in summary["items"]:
         sku = item["parent_sku"]
         our_price = our_median.get(sku)
+        # If no pricing action, use the max competitor price as proxy for "our" price
+        if not our_price:
+            list_prices = [c.get("list_price") or c["price"] for c in item["competitors"]]
+            our_price = max(list_prices) if list_prices else None
         if not our_price:
             continue
 
