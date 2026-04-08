@@ -7,7 +7,7 @@ BRAND_COMPETITORS = {
     "BOLD": ["falabella", "theline", "paris", "nike_cl"],  # ripley blocked (403), mercadolibre needs OAuth scope
     "BAMERS": ["falabella", "paris"],  # ripley blocked (403), mercadolibre needs OAuth scope
     "OAKLEY": ["falabella", "paris"],
-    "BELSPORT": ["falabella", "paris"],
+    "BELSPORT": [],  # Skipped — OOM at 24 GiB with scraping + 66 stores + 6,422 SKUs
 }
 
 # Rate limits per adapter (seconds between requests)
