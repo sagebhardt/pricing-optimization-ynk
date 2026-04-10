@@ -529,6 +529,10 @@ function App() {
   const [alerts, setAlerts] = useState([])
   const [crossStoreAlerts, setCrossStoreAlerts] = useState([])
   const [compAnalytics, setCompAnalytics] = useState(null)
+  const [aiOpen, setAiOpen] = useState(false)
+  const [aiQuestion, setAiQuestion] = useState('')
+  const [aiMessages, setAiMessages] = useState([])
+  const [aiLoading, setAiLoading] = useState(false)
   const [performanceData, setPerformanceData] = useState(null)
   const [outcomeDetails, setOutcomeDetails] = useState([])
   const [auditLog, setAuditLog] = useState([])
@@ -1688,6 +1692,53 @@ function App() {
       )}
 
       {toast && <div className={`toast toast--${toast.type}`}>{toast.msg}</div>}
+
+      {/* AI Assistant */}
+      <button className="ai-fab" onClick={() => setAiOpen(!aiOpen)} title="Asistente IA">
+        {aiOpen ? <X size={20} /> : <BarChart2 size={20} />}
+      </button>
+      {aiOpen && (
+        <div className="ai-panel">
+          <div className="ai-header">Asistente de Pricing — {brand?.label}</div>
+          <div className="ai-messages">
+            {aiMessages.length === 0 && (
+              <div className="ai-hint">Pregunta sobre pricing, competencia, rendimiento del modelo...</div>
+            )}
+            {aiMessages.map((m, i) => (
+              <div key={i} className={`ai-msg ai-msg--${m.role}`}>
+                <div className="ai-msg-text">{m.text}</div>
+              </div>
+            ))}
+            {aiLoading && <div className="ai-msg ai-msg--assistant"><div className="ai-msg-text">Pensando...</div></div>}
+          </div>
+          <form className="ai-input" onSubmit={e => {
+            e.preventDefault()
+            if (!aiQuestion.trim() || aiLoading) return
+            const q = aiQuestion.trim()
+            setAiMessages(prev => [...prev, { role: 'user', text: q }])
+            setAiQuestion('')
+            setAiLoading(true)
+            authFetch('/ai/ask', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ question: q, brand: brand?.id || 'hoka' }),
+            })
+              .then(r => r.json())
+              .then(d => {
+                setAiMessages(prev => [...prev, { role: 'assistant', text: d.answer || d.error || 'Sin respuesta' }])
+                setAiLoading(false)
+              })
+              .catch(() => {
+                setAiMessages(prev => [...prev, { role: 'assistant', text: 'Error de conexión' }])
+                setAiLoading(false)
+              })
+          }}>
+            <input type="text" value={aiQuestion} onChange={e => setAiQuestion(e.target.value)}
+                   placeholder="¿Por qué este SKU está en alta urgencia?" />
+            <button type="submit" disabled={aiLoading}>→</button>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

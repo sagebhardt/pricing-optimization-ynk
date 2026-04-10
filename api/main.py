@@ -9,7 +9,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse, JSONResponse
@@ -130,6 +130,29 @@ class FeedbackPayload(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/ai/ask")
+def ai_ask(request: Request, body: dict = Body(...)):
+    """Ask the AI pricing assistant a question."""
+    from api.ai_assistant import ask
+    user = _get_user(request)
+    question = body.get("question", "")
+    brand = body.get("brand", "hoka")
+    if not question:
+        return {"error": "No question provided"}
+    _check_brand_access(user, brand)
+    answer = ask(question, brand)
+    return {"question": question, "brand": brand, "answer": answer}
+
+
+@app.get("/report/weekly")
+def weekly_report(request: Request, brand: Optional[str] = Query(None)):
+    """Generate weekly pricing report."""
+    from api.weekly_report import generate_weekly_report, format_plain_text
+    user = _get_user(request)
+    report = generate_weekly_report(brand)
+    return {"report": report, "text": format_plain_text(report)}
 
 
 @app.get("/alerts")
