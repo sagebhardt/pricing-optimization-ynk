@@ -285,11 +285,18 @@ def get_analytics_overview(request: Request):
     if user_brands:
         all_brands = [b for b in all_brands if b in user_brands]
 
+    # Parallel brand loading (I/O-bound GCS reads)
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _load_brand_data(bid):
+        return bid, storage.load_pricing_actions(bid), storage.load_model_info(bid)
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        brand_data = list(ex.map(_load_brand_data, all_brands))
+
     brands = []
-    for bid in all_brands:
-        ad = storage.load_pricing_actions(bid)
+    for bid, ad, meta in brand_data:
         items = ad.get("items", [])
-        meta = storage.load_model_info(bid)
         week = ad.get("week")
 
         dec_data = storage.load_decisions(bid, week) if week else {"decisions": {}}

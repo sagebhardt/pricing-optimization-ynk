@@ -57,8 +57,9 @@ def extract_brand(brand_name: str):
     products.to_parquet(raw_dir / "products.parquet", index=False)
     print(f"  {len(products):,} products")
 
-    # 2. Transactions (filter to brand codes)
+    # 2. Transactions (filter to brand codes in SQL to avoid pulling non-brand rows)
     print("Extracting transactions...")
+    brand_skus = set(products[products["grupo_articulos"].isin(brand_codes)]["material"])
     txn = pd.read_sql(f"""
         SELECT folio, tipo_documento, canal, tipo AS tipo_entrega,
                fecha_pos AS fecha, banner, tienda, centro, almacen,
@@ -67,12 +68,11 @@ def extract_brand(brand_name: str):
         FROM ventas.ventas_por_vendedor
         WHERE banner = '{banner}'
           AND sku NOT IN ({excl})
+          AND sku IN (
+              SELECT DISTINCT material FROM ventas.sku_tableau
+              WHERE grupo_articulos IN ({brand_filter})
+          )
     """, conn)
-
-    # Filter to actual brand products
-    brand_skus = set(products[products["grupo_articulos"].isin(brand_codes)]["material"])
-    n_before = len(txn)
-    txn = txn[txn["sku"].isin(brand_skus)]
     txn["fecha"] = pd.to_datetime(txn["fecha"])
     txn.to_parquet(raw_dir / "transactions.parquet", index=False)
     print(f"  {len(txn):,} transactions (filtered {n_before - len(txn)} non-brand SKUs)")

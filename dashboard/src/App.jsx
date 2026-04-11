@@ -795,7 +795,10 @@ function App() {
       result.sort((a, b) => (a.store_name || a.store || '').localeCompare(b.store_name || b.store || ''))
     }
     return result
-  }, [actions, filterStore, filterVendor, filterUrgency, filterCategory, filterStatus, search, sortBy, decisions, useVendorGrouping])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actions, filterStore, filterVendor, filterUrgency, filterCategory, filterStatus, search, sortBy, useVendorGrouping,
+      // Only re-filter on decisions when status filter is active (avoids re-render on every approve/reject)
+      ...(filterStatus !== 'all' ? [decisions] : [])])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   useEffect(() => { if (page > totalPages) setPage(totalPages) }, [page, totalPages])

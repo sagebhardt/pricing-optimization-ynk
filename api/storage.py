@@ -622,16 +622,13 @@ def load_audit(brand: str, limit: int = 100) -> list:
 
 
 def _gcs_append_audit(brand, entry):
+    """Write audit entry as individual GCS object — O(1) per write, no race condition."""
     bucket = _get_bucket()
     now = datetime.now()
-    path = f"audit/{brand.lower()}/{now.strftime('%Y-%m')}.jsonl"
+    # Individual object per entry: audit/{brand}/2026-04/{timestamp}.json
+    path = f"audit/{brand.lower()}/{now.strftime('%Y-%m')}/{now.strftime('%Y%m%dT%H%M%S%f')}.json"
     blob = bucket.blob(path)
-    line = json.dumps(entry, ensure_ascii=False) + "\n"
-    if blob.exists():
-        existing = blob.download_as_text()
-        blob.upload_from_string(existing + line, content_type="application/x-ndjson")
-    else:
-        blob.upload_from_string(line, content_type="application/x-ndjson")
+    blob.upload_from_string(json.dumps(entry, ensure_ascii=False), content_type="application/json")
 
 
 def _gcs_load_audit(brand, limit):
@@ -640,11 +637,18 @@ def _gcs_load_audit(brand, limit):
     blobs = sorted(bucket.list_blobs(prefix=prefix), key=lambda b: b.name, reverse=True)
     entries = []
     for blob in blobs:
-        for line in reversed(blob.download_as_text().strip().split("\n")):
-            if line:
-                entries.append(json.loads(line))
-            if len(entries) >= limit:
-                break
+        text = blob.download_as_text().strip()
+        if blob.name.endswith(".json") and not blob.name.endswith(".jsonl"):
+            # New format: one JSON object per file
+            if text:
+                entries.append(json.loads(text))
+        else:
+            # Old format: JSONL (multiple lines per file)
+            for line in reversed(text.split("\n")):
+                if line:
+                    entries.append(json.loads(line))
+                if len(entries) >= limit:
+                    break
         if len(entries) >= limit:
             break
     return entries[:limit]

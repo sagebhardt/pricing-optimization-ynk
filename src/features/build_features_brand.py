@@ -641,16 +641,23 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
     parent_col = "codigo_padre" if "codigo_padre" in weekly.columns else "sku"
     steps = np.array(DISCOUNT_STEPS)  # (9,)
 
-    # Map SKU → cost using prefix matching
+    # Map SKU → cost using prefix matching (vectorized over unique SKUs only)
     skus = weekly[parent_col].fillna(weekly.get("sku", "")).values
-    costs = np.array([_get_cost(s) or np.nan for s in skus])  # (N,)
+    unique_skus = pd.unique(skus)
+    cost_lookup = {}
+    for s in unique_skus:
+        c = _get_cost(s)
+        if c is not None:
+            cost_lookup[s] = c
+    costs = np.array([cost_lookup.get(s, np.nan) for s in skus])  # (N,) — dict lookup, not prefix loop
 
     list_prices = weekly["avg_precio_lista"].values.astype(float)  # (N,)
     actual_disc = np.where(np.isnan(weekly["discount_rate"].values), 0, weekly["discount_rate"].values)  # (N,)
     actual_vel = weekly["velocity_4w"].values.astype(float)  # (N,)
 
-    # Elasticity lookup
-    elast = np.array([elast_map.get(s, np.nan) for s in skus])  # (N,)
+    # Elasticity lookup (vectorized over unique SKUs)
+    elast_lookup = {s: elast_map.get(s, np.nan) for s in unique_skus}
+    elast = np.array([elast_lookup.get(s, np.nan) for s in skus])  # (N,)
     has_elast = np.isfinite(elast) & (elast < -0.3)  # (N,)
 
     # Valid mask: has cost, positive list price, positive velocity
@@ -670,7 +677,8 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
     vel_elast = np.maximum(actual_vel[:, None] * (1 + vol_change), 0.1)  # (N, 9)
 
     # Data-derived lift table velocity (fallback when no elasticity)
-    snap_steps = np.array([_snap_disc(d) for d in actual_disc])  # (N,)
+    _snap_disc_vec = np.vectorize(_snap_disc)
+    snap_steps = _snap_disc_vec(actual_disc)  # (N,)
     base_lift = np.array([lift_table.get(s, 1.0) for s in snap_steps])  # (N,)
     target_lift = np.array([lift_table.get(s, 1 + s * 5) for s in steps])  # (9,)
     vel_lift = np.maximum(actual_vel[:, None] * target_lift[None, :] / np.maximum(base_lift[:, None], 0.1), 0.1)  # (N, 9)
@@ -691,7 +699,7 @@ def add_margin_targets(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
     best_profit = profit[np.arange(N), best_idx]  # (N,)
 
     # Snap current discount to step
-    current_step = np.array([_snap_disc(d) for d in actual_disc])  # (N,)
+    current_step = _snap_disc_vec(actual_disc)  # (N,)
     should_reprice = (best_step != current_step).astype(float)
 
     # Apply valid mask

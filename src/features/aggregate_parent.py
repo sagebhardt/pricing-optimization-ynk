@@ -338,27 +338,16 @@ def aggregate_to_parent(brand: str):
         if cc_stores > 0:
             print(f"  {cc_stores} parent-store-weeks have >50% click & collect")
 
-    # Pass through weather features (same for all children in a parent-store-week)
+    # Pass through weather + category + competitor features in a single groupby
     weather_cols = [c for c in child.columns if c in ("avg_temp", "max_temp", "min_temp",
                     "total_rain", "rain_days", "temp_deviation", "is_rainy_week")]
-    if weather_cols:
-        weather_agg = child.groupby(["codigo_padre", "centro", "week"])[weather_cols].first().reset_index()
-        parent = parent.merge(weather_agg, on=["codigo_padre", "centro", "week"], how="left")
-        print(f"  Weather features: {weather_cols}")
-
-    # Pass through category interaction features
     cat_cols = [c for c in child.columns if c.startswith("cat_x_")]
-    if cat_cols:
-        cat_agg = child.groupby(["codigo_padre", "centro", "week"])[cat_cols].first().reset_index()
-        parent = parent.merge(cat_agg, on=["codigo_padre", "centro", "week"], how="left")
-        print(f"  Category interactions: {cat_cols}")
-
-    # Pass through competitor features (already at parent level)
     comp_cols = [c for c in child.columns if c.startswith("comp_")]
-    if comp_cols:
-        comp_agg = child.groupby(["codigo_padre", "centro", "week"])[comp_cols].first().reset_index()
-        parent = parent.merge(comp_agg, on=["codigo_padre", "centro", "week"], how="left")
-        print(f"  Competitor features: {comp_cols}")
+    passthrough_cols = weather_cols + cat_cols + comp_cols
+    if passthrough_cols:
+        passthrough_agg = child.groupby(["codigo_padre", "centro", "week"])[passthrough_cols].first().reset_index()
+        parent = parent.merge(passthrough_agg, on=["codigo_padre", "centro", "week"], how="left")
+        print(f"  Passthrough features ({len(passthrough_cols)}): weather={len(weather_cols)}, cat={len(cat_cols)}, comp={len(comp_cols)}")
 
     # Drop helper columns
     parent.drop(columns=["sizes_in_data", "total_sizes_catalog", "sizes_active"], inplace=True, errors="ignore")
