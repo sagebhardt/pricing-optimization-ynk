@@ -397,6 +397,61 @@ def add_stock_features(weekly: pd.DataFrame, stock: pd.DataFrame) -> pd.DataFram
     return weekly
 
 
+def add_backorder_features(weekly: pd.DataFrame, backorder: pd.DataFrame) -> pd.DataFrame:
+    """Merge datawarehouse backorder signal (open PO units, earliest delivery) per (sku, centro).
+
+    backorder columns: cod_padre, sku, centro, open_qty, earliest_delivery, n_open_pos
+    (produced by src/data/extract_brand.py step 11, Phase 6).
+
+    Adds:
+    - open_po_units: open PO units for the SKU at a centro (static — not time-varying per week).
+      Rationale: DW tracks receipt at the central warehouse only (AB75 for HOKA, DC for others),
+      so open_qty is a brand-wide supply signal rather than a per-store one. We broadcast the
+      same value to every week in the SKU-centro row; the model learns its relevance.
+    - days_to_delivery: days until earliest expected delivery (negative if already past due).
+      Stale POs (very negative) typically mean the PO is dead in SAP but not formally closed.
+    """
+    # Empty-input fast path: add zero/sentinel columns directly with known dtypes
+    # (avoids pandas object-dtype merge + fillna FutureWarning).
+    if len(backorder) == 0:
+        weekly = weekly.copy()
+        weekly["open_po_units"] = 0.0
+        weekly["n_open_pos"] = 0
+        weekly["days_to_delivery"] = 9999
+        return weekly
+
+    bo = backorder[["sku", "centro", "open_qty", "earliest_delivery", "n_open_pos"]].copy()
+    bo["earliest_delivery"] = pd.to_datetime(bo["earliest_delivery"])
+    # Aggregate across any residual duplicates (upstream already grouped, but guard against
+    # re-runs): sum open units + PO counts, keep the earliest delivery date.
+    bo = bo.groupby(["sku", "centro"], as_index=False).agg(
+        open_po_units=("open_qty", "sum"),
+        earliest_delivery=("earliest_delivery", "min"),
+        n_open_pos=("n_open_pos", "sum"),
+    )
+
+    weekly = weekly.merge(bo, on=["sku", "centro"], how="left")
+
+    # Backorder is a point-in-time snapshot (today's open POs). Applying it to historical
+    # weeks would leak future information into training, so zero out everything except the
+    # most recent week per (sku, centro).
+    if len(weekly):
+        historical = weekly["week"] < weekly["week"].max()
+        weekly.loc[historical, ["open_po_units", "n_open_pos"]] = 0
+        weekly.loc[historical, "earliest_delivery"] = pd.NaT
+
+    # Two-step fillna + astype to avoid pandas 3.x downcast FutureWarning
+    weekly["open_po_units"] = weekly["open_po_units"].fillna(0)
+    weekly["open_po_units"] = weekly["open_po_units"].astype(float)
+    weekly["n_open_pos"] = weekly["n_open_pos"].fillna(0)
+    weekly["n_open_pos"] = weekly["n_open_pos"].astype(int)
+    weekly["days_to_delivery"] = (
+        (weekly["earliest_delivery"] - weekly["week"]).dt.days
+    ).fillna(9999)  # sentinel for "no open POs"
+    weekly = weekly.drop(columns=["earliest_delivery"])
+    return weekly
+
+
 def add_size_sales_share(weekly: pd.DataFrame, txn: pd.DataFrame, products: pd.DataFrame) -> pd.DataFrame:
     """Add each child SKU's historical volume share within its parent.
 
@@ -822,6 +877,18 @@ def build_features_for_brand(brand: str):
         weekly = add_size_sales_share(weekly, txn, products)
     else:
         print(f"[{brand}] No stock data available — skipping inventory features")
+
+    # Backorder signal (open PO units per SKU-centro from datawarehouse).
+    # Opt-in: skipped when backorder_signal.parquet is absent (pre-Phase-6 pipelines).
+    backorder_path = _raw_dir(brand) / "backorder_signal.parquet"
+    if backorder_path.exists():
+        backorder = pd.read_parquet(backorder_path)
+        if len(backorder) > 0:
+            print(f"[{brand}] Adding backorder features ({len(backorder):,} open PO lines)...")
+            weekly = add_backorder_features(weekly, backorder)
+            matched = (weekly["open_po_units"] > 0).sum()
+            print(f"  Backorder matched: {matched:,} / {len(weekly):,} rows "
+                  f"({matched/max(len(weekly),1):.1%})")
 
     # Weather features (Open-Meteo API, cached locally)
     print(f"[{brand}] Adding weather features...")
