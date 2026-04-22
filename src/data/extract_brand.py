@@ -20,6 +20,81 @@ def get_connection():
     return psycopg2.connect(**DB_CONFIG)
 
 
+def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
+    """Pull per-parent CLP cost from datawarehouse.costo.
+
+    Costs live at child (sized) SKU level. For each parent: take the latest cost
+    per (producto_id, centro_id) within lookback_days, then average across
+    children and centros. Returns a DataFrame with columns ['sku', 'cost'] or
+    None if the DW is unreachable. Parents with no recent cost rows are omitted
+    (caller falls back to ti.productos for those).
+    """
+    if not parent_skus:
+        return None
+    try:
+        conn = get_connection()
+        placeholders = ",".join(["%s"] * len(parent_skus))
+        query = f"""
+            WITH brand_children AS (
+                SELECT producto_id, sku_padre_sap
+                FROM datawarehouse.producto
+                WHERE sku_padre_sap IN ({placeholders})
+                  AND sku_padre_sap IS NOT NULL
+            ),
+            latest_cost AS (
+                SELECT DISTINCT ON (c.producto_id, c.centro_id)
+                       c.producto_id, c.centro_id, c.costo
+                FROM datawarehouse.costo c
+                JOIN brand_children bc ON c.producto_id = bc.producto_id
+                WHERE c.fecha >= CURRENT_DATE - INTERVAL '{int(lookback_days)} days'
+                  AND c.costo > 0
+                ORDER BY c.producto_id, c.centro_id, c.fecha DESC
+            )
+            SELECT bc.sku_padre_sap AS sku,
+                   ROUND(AVG(lc.costo))::bigint AS cost,
+                   COUNT(DISTINCT lc.producto_id) AS n_children_with_cost,
+                   (SELECT COUNT(*) FROM brand_children b2
+                    WHERE b2.sku_padre_sap = bc.sku_padre_sap) AS n_children_total
+            FROM brand_children bc
+            JOIN latest_cost lc ON bc.producto_id = lc.producto_id
+            GROUP BY bc.sku_padre_sap
+        """
+        df = pd.read_sql(query, conn, params=tuple(parent_skus))
+        conn.close()
+        if len(df) > 0:
+            thin = df[df["n_children_with_cost"] < 0.3 * df["n_children_total"]]
+            if len(thin) > 0:
+                print(f"  datawarehouse: {len(thin)} parents have <30% child coverage (may be stale)")
+        return df[["sku", "cost"]]
+    except Exception as e:
+        print(f"  datawarehouse.costo extraction skipped: {e}")
+        return None
+
+
+def _extract_costs_from_ti(parent_skus):
+    """Legacy fallback: cost from ti.productos with USD/CLP 1000x heuristic.
+
+    Costs < 500 are treated as USD and multiplied by 1000 (calibrated against
+    known HOKA costs). Used only for parents the datawarehouse does not cover.
+    """
+    if not parent_skus:
+        return None
+    try:
+        conn = get_connection()
+        placeholders = ",".join(["%s"] * len(parent_skus))
+        df = pd.read_sql(
+            f"SELECT cod_padre AS sku, reg_info AS cost FROM ti.productos WHERE cod_padre IN ({placeholders})",
+            conn, params=tuple(parent_skus),
+        )
+        conn.close()
+        df = df[df["cost"] > 0].dropna(subset=["cost"])
+        df["cost"] = df["cost"].apply(lambda c: c * 1000 if c < 500 else c)
+        return df.drop_duplicates(subset=["sku"])
+    except Exception as e:
+        print(f"  ti.productos cost extraction skipped: {e}")
+        return None
+
+
 def extract_brand(brand_name: str):
     brand_name = brand_name.upper()
     if brand_name not in BRANDS:
@@ -163,30 +238,25 @@ def extract_brand(brand_name: str):
         except Exception as e:
             print(f"  GCS supplemental download skipped: {e}")
 
-    # 9. Generate costs from ti.productos if no costs.parquet yet
+    # 9. Generate costs.parquet if not already present (from GCS or local).
+    # Source order: datawarehouse.costo (authoritative, CLP) → ti.productos (legacy, USD/CLP heuristic).
     costs_path = raw_dir / "costs.parquet"
     if not costs_path.exists():
-        try:
-            conn2 = get_connection()
-            parent_skus = list(products["codigo_padre"].dropna().unique())
-            if parent_skus:
-                placeholders = ",".join(["%s"] * len(parent_skus))
-                cost_df = pd.read_sql(
-                    f"SELECT cod_padre AS sku, reg_info AS cost FROM ti.productos WHERE cod_padre IN ({placeholders})",
-                    conn2, params=parent_skus,
-                )
-                cost_df = cost_df[cost_df["cost"] > 0].dropna(subset=["cost"])
-                # Convert USD to CLP: costs < 500 are in USD
-                cost_df["cost"] = cost_df["cost"].apply(
-                    lambda c: c * 1000 if c < 500 else c
-                )
-                cost_df = cost_df.drop_duplicates(subset=["sku"])
-                if len(cost_df) > 0:
-                    cost_df.to_parquet(costs_path, index=False)
-                    print(f"  Generated costs.parquet from ti.productos: {len(cost_df):,} SKUs")
-            conn2.close()
-        except Exception as e:
-            print(f"  ti.productos cost extraction skipped: {e}")
+        parent_skus = list(products["codigo_padre"].dropna().unique())
+        if parent_skus:
+            dw_df = _extract_costs_from_dw(parent_skus)
+            covered = set(dw_df["sku"]) if dw_df is not None and len(dw_df) > 0 else set()
+            missing = [s for s in parent_skus if s not in covered]
+            ti_df = _extract_costs_from_ti(missing) if missing else None
+
+            parts = [df for df in (dw_df, ti_df) if df is not None and len(df) > 0]
+            if parts:
+                cost_df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["sku"])
+                cost_df.to_parquet(costs_path, index=False)
+                n_dw = len(dw_df) if dw_df is not None else 0
+                n_ti = len(ti_df) if ti_df is not None else 0
+                print(f"  Generated costs.parquet: {len(cost_df):,} SKUs "
+                      f"(datawarehouse={n_dw:,}, ti.productos fallback={n_ti:,})")
 
     print(f"\n--- {brand_name} Extraction Complete ---")
     print(f"  Transactions: {len(txn):,}")
