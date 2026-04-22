@@ -97,3 +97,40 @@ class TestExtractOfficialPricesFromDw:
     def test_returns_none_on_db_error(self):
         with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
             assert eb._extract_official_prices_from_dw(["HKABC"]) is None
+
+
+class TestExtractStockFromDw:
+    def test_empty_parents_returns_none(self):
+        assert eb._extract_stock_from_dw([], [1, 4]) is None
+
+    def test_empty_banners_returns_none(self):
+        assert eb._extract_stock_from_dw(["NI123"], []) is None
+
+    def test_returns_dataframe_on_success(self):
+        raw = pd.DataFrame({
+            "fecha": ["2026-04-21"],
+            "store_id": ["AB10-Belsport Digital"],
+            "sku": ["NI123456X"],
+            "stock_on_hand_units": [5],
+            "stock_in_transit_units": [2],
+            "total_stock_position_units": [7],
+        })
+        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+             patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
+            out = eb._extract_stock_from_dw(["NI1234"], [1, 4])
+        query, _ = read_sql.call_args[0]
+        assert "datawarehouse.stock" in query
+        assert "datawarehouse.producto" in query
+        assert "datawarehouse.centro" in query
+        assert "venta_organizacion_id" in query
+        assert "16 weeks" in query  # default lookback
+        # params should be banner_ids first, then parent_skus
+        assert "params" in read_sql.call_args[1], "params must be passed as kwarg"
+        params = read_sql.call_args[1]["params"]
+        assert params == (1, 4, "NI1234")
+        # fecha must be converted to datetime
+        assert out["fecha"].dtype.kind == "M"
+
+    def test_returns_none_on_db_error(self):
+        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+            assert eb._extract_stock_from_dw(["NI1234"], [1, 4]) is None

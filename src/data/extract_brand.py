@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import pandas as pd
 import psycopg2
 from pathlib import Path
-from config.database import DB_CONFIG, BRANDS, EXCLUDE_SKUS, STOCK_TABLES
+from config.database import DB_CONFIG, BRANDS, EXCLUDE_SKUS, STOCK_TABLES, DW_STOCK_BANNERS
 
 
 def get_connection():
@@ -103,6 +103,53 @@ def _extract_official_prices_from_dw(parent_skus):
         return pd.read_sql(query, conn, params=tuple(parent_skus))
     except Exception as e:
         print(f"  datawarehouse.producto_precio_padre extraction skipped: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
+    """Pull per-SKU per-store daily stock from datawarehouse.stock.
+
+    Output schema matches the legacy `public.stock_{brand}` tables that
+    downstream code (size_curve, build_features_brand) consumes:
+      fecha, store_id, sku, stock_on_hand_units, stock_in_transit_units,
+      total_stock_position_units.
+
+    `banner_ids` is a list of datawarehouse.venta_organizacion_id values
+    (e.g., [1, 4] for Belsport + Belsport Kids) to scope stock to the brand's
+    own stores. Returns a DataFrame or None on error.
+    """
+    if not parent_skus or not banner_ids:
+        return None
+    conn = None
+    try:
+        conn = get_connection()
+        sku_placeholders = ",".join(["%s"] * len(parent_skus))
+        banner_placeholders = ",".join(["%s"] * len(banner_ids))
+        query = f"""
+            SELECT
+                s.fecha,
+                ctr.tienda_codigo_sap || '-' || ctr.tienda_nombre AS store_id,
+                p.sku_sap AS sku,
+                COALESCE(s.stock, 0) AS stock_on_hand_units,
+                COALESCE(s.stock_transito, 0) AS stock_in_transit_units,
+                (COALESCE(s.stock, 0) + COALESCE(s.stock_transito, 0)) AS total_stock_position_units
+            FROM datawarehouse.stock s
+            JOIN datawarehouse.producto p ON s.producto_id = p.producto_id
+            JOIN datawarehouse.centro ctr ON s.centro_id = ctr.centro_id
+            WHERE ctr.venta_organizacion_id IN ({banner_placeholders})
+              AND s.fecha >= CURRENT_DATE - INTERVAL '{int(lookback_weeks)} weeks'
+              AND p.sku_padre_sap IN ({sku_placeholders})
+        """
+        params = tuple(banner_ids) + tuple(parent_skus)
+        df = pd.read_sql(query, conn, params=params)
+        df["fecha"] = pd.to_datetime(df["fecha"])
+        return df
+    except Exception as e:
+        print(f"  datawarehouse.stock extraction skipped: {e}")
         return None
     finally:
         if conn is not None:
@@ -232,6 +279,7 @@ def extract_brand(brand_name: str):
     # 6. Stock / inventory (last 16 weeks only — sufficient for size curve trailing 12w peak)
     stock = pd.DataFrame()
     stock_table = STOCK_TABLES.get(brand_name)
+    dw_banners = DW_STOCK_BANNERS.get(brand_name)
     if stock_table:
         print(f"Extracting stock from {stock_table}...")
         try:
@@ -251,6 +299,18 @@ def extract_brand(brand_name: str):
         except Exception as e:
             print(f"  Stock table {stock_table} not available — skipping ({e})")
             conn.rollback()
+    elif dw_banners:
+        parents_for_stock = list(products["codigo_padre"].dropna().unique())
+        print(f"Extracting stock from datawarehouse.stock (banners={dw_banners})...")
+        dw_stock = _extract_stock_from_dw(parents_for_stock, dw_banners)
+        if dw_stock is not None and len(dw_stock) > 0:
+            stock = dw_stock
+            stock.to_parquet(raw_dir / "stock.parquet", index=False)
+            print(f"  {len(stock):,} stock records, "
+                  f"{stock['fecha'].min().date()}→{stock['fecha'].max().date()}, "
+                  f"stores={stock['store_id'].nunique()}")
+        else:
+            print("  datawarehouse.stock returned no rows")
     else:
         print(f"No stock table configured for {brand_name} — skipping")
 
