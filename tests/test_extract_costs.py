@@ -1,4 +1,4 @@
-"""Tests for cost extraction fallback logic in src/data/extract_brand.py."""
+"""Tests for cost and official-price extraction in src/data/extract_brand.py."""
 
 from unittest.mock import patch, MagicMock
 import pandas as pd
@@ -75,3 +75,25 @@ class TestExtractCostsFromTi:
     def test_returns_none_on_db_error(self):
         with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
             assert eb._extract_costs_from_ti(["A"]) is None
+
+
+class TestExtractOfficialPricesFromDw:
+    def test_empty_parents_returns_none(self):
+        assert eb._extract_official_prices_from_dw([]) is None
+
+    def test_returns_dataframe_on_success(self):
+        raw = pd.DataFrame({"sku": ["HKABC", "HKDEF"], "list_price": [49990, 129990]})
+        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+             patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
+            out = eb._extract_official_prices_from_dw(["HKABC", "HKDEF"])
+        assert read_sql.called
+        query, _ = read_sql.call_args[0]
+        assert "datawarehouse.producto_precio_padre" in query
+        assert "MAX(precio_normal)" in query
+        assert "fecha_inicio_validez <= CURRENT_DATE" in query
+        assert "fecha_fin_validez" in query  # guard: validity-window filter must stay
+        pd.testing.assert_frame_equal(out, raw)
+
+    def test_returns_none_on_db_error(self):
+        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+            assert eb._extract_official_prices_from_dw(["HKABC"]) is None

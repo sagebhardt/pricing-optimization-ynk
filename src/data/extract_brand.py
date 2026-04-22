@@ -31,6 +31,7 @@ def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
     """
     if not parent_skus:
         return None
+    conn = None
     try:
         conn = get_connection()
         placeholders = ",".join(["%s"] * len(parent_skus))
@@ -60,7 +61,6 @@ def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
             GROUP BY bc.sku_padre_sap
         """
         df = pd.read_sql(query, conn, params=tuple(parent_skus))
-        conn.close()
         if len(df) > 0:
             thin = df[df["n_children_with_cost"] < 0.3 * df["n_children_total"]]
             if len(thin) > 0:
@@ -69,6 +69,45 @@ def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
     except Exception as e:
         print(f"  datawarehouse.costo extraction skipped: {e}")
         return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
+def _extract_official_prices_from_dw(parent_skus):
+    """Pull per-parent list price from datawarehouse.producto_precio_padre.
+
+    Each parent can have multiple rows across price lists (retail, outlet,
+    virtual, eventos, liquidación, etc.). We take the MAX of `precio_normal`
+    over rows currently within their validity window — this recovers the
+    undiscounted retail list price regardless of which list it belongs to.
+    Returns a DataFrame with columns ['sku', 'list_price'] or None on error.
+    """
+    if not parent_skus:
+        return None
+    conn = None
+    try:
+        conn = get_connection()
+        placeholders = ",".join(["%s"] * len(parent_skus))
+        query = f"""
+            SELECT sku_padre_sap AS sku,
+                   MAX(precio_normal) AS list_price
+            FROM datawarehouse.producto_precio_padre
+            WHERE sku_padre_sap IN ({placeholders})
+              AND precio_normal > 0
+              AND fecha_inicio_validez <= CURRENT_DATE
+              AND (fecha_fin_validez IS NULL OR fecha_fin_validez > CURRENT_DATE)
+            GROUP BY sku_padre_sap
+        """
+        return pd.read_sql(query, conn, params=tuple(parent_skus))
+    except Exception as e:
+        print(f"  datawarehouse.producto_precio_padre extraction skipped: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 
 def _extract_costs_from_ti(parent_skus):
@@ -79,6 +118,7 @@ def _extract_costs_from_ti(parent_skus):
     """
     if not parent_skus:
         return None
+    conn = None
     try:
         conn = get_connection()
         placeholders = ",".join(["%s"] * len(parent_skus))
@@ -86,13 +126,16 @@ def _extract_costs_from_ti(parent_skus):
             f"SELECT cod_padre AS sku, reg_info AS cost FROM ti.productos WHERE cod_padre IN ({placeholders})",
             conn, params=tuple(parent_skus),
         )
-        conn.close()
         df = df[df["cost"] > 0].dropna(subset=["cost"])
         df["cost"] = df["cost"].apply(lambda c: c * 1000 if c < 500 else c)
         return df.drop_duplicates(subset=["sku"])
     except Exception as e:
         print(f"  ti.productos cost extraction skipped: {e}")
         return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
 
 
 def extract_brand(brand_name: str):
@@ -238,25 +281,35 @@ def extract_brand(brand_name: str):
         except Exception as e:
             print(f"  GCS supplemental download skipped: {e}")
 
+    parent_skus = list(products["codigo_padre"].dropna().unique())
+
     # 9. Generate costs.parquet if not already present (from GCS or local).
     # Source order: datawarehouse.costo (authoritative, CLP) → ti.productos (legacy, USD/CLP heuristic).
     costs_path = raw_dir / "costs.parquet"
-    if not costs_path.exists():
-        parent_skus = list(products["codigo_padre"].dropna().unique())
-        if parent_skus:
-            dw_df = _extract_costs_from_dw(parent_skus)
-            covered = set(dw_df["sku"]) if dw_df is not None and len(dw_df) > 0 else set()
-            missing = [s for s in parent_skus if s not in covered]
-            ti_df = _extract_costs_from_ti(missing) if missing else None
+    if not costs_path.exists() and parent_skus:
+        dw_df = _extract_costs_from_dw(parent_skus)
+        covered = set(dw_df["sku"]) if dw_df is not None and len(dw_df) > 0 else set()
+        missing = [s for s in parent_skus if s not in covered]
+        ti_df = _extract_costs_from_ti(missing) if missing else None
 
-            parts = [df for df in (dw_df, ti_df) if df is not None and len(df) > 0]
-            if parts:
-                cost_df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["sku"])
-                cost_df.to_parquet(costs_path, index=False)
-                n_dw = len(dw_df) if dw_df is not None else 0
-                n_ti = len(ti_df) if ti_df is not None else 0
-                print(f"  Generated costs.parquet: {len(cost_df):,} SKUs "
-                      f"(datawarehouse={n_dw:,}, ti.productos fallback={n_ti:,})")
+        parts = [df for df in (dw_df, ti_df) if df is not None and len(df) > 0]
+        if parts:
+            cost_df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["sku"])
+            cost_df.to_parquet(costs_path, index=False)
+            n_dw = len(dw_df) if dw_df is not None else 0
+            n_ti = len(ti_df) if ti_df is not None else 0
+            print(f"  Generated costs.parquet: {len(cost_df):,} SKUs "
+                  f"(datawarehouse={n_dw:,}, ti.productos fallback={n_ti:,})")
+
+    # 10. Generate official_prices.parquet from datawarehouse if GCS didn't provide one.
+    official_path = raw_dir / "official_prices.parquet"
+    if not official_path.exists() and parent_skus:
+        op_df = _extract_official_prices_from_dw(parent_skus)
+        if op_df is not None and len(op_df) > 0:
+            op_df.to_parquet(official_path, index=False)
+            pct = 100 * len(op_df) / len(parent_skus)
+            print(f"  Generated official_prices.parquet: {len(op_df):,} / {len(parent_skus):,} parents "
+                  f"({pct:.0f}% coverage from datawarehouse)")
 
     print(f"\n--- {brand_name} Extraction Complete ---")
     print(f"  Transactions: {len(txn):,}")
