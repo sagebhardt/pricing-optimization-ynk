@@ -452,6 +452,61 @@ def add_backorder_features(weekly: pd.DataFrame, backorder: pd.DataFrame) -> pd.
     return weekly
 
 
+def add_replenishment_features(weekly: pd.DataFrame, replenishment: pd.DataFrame) -> pd.DataFrame:
+    """Merge datawarehouse replenishment signal per (sku, centro) into weekly features.
+
+    replenishment columns: cod_padre, sku, centro, units_in_transit,
+    units_received_window, avg_transit_days, n_transfers (Phase 6b).
+
+    Adds:
+    - units_in_transit: units destined for this centro but not yet received (today).
+    - units_received_window: units received at this centro in the lookback window (12w).
+    - avg_transit_days: recent avg transit time for arrivals — proxy for replenishment lag.
+    - n_transfers: count of transfer lines in window.
+
+    Like the backorder feature, this is a today-anchored snapshot. Broadcasting to
+    historical weeks would leak future activity into training, so we zero out
+    everything except the most recent week per (sku, centro).
+    """
+    if len(replenishment) == 0:
+        weekly = weekly.copy()
+        weekly["units_in_transit"] = 0.0
+        weekly["units_received_window"] = 0.0
+        weekly["avg_transit_days"] = pd.NA
+        weekly["n_transfers"] = 0
+        return weekly
+
+    rep = replenishment[[
+        "sku", "centro", "units_in_transit", "units_received_window",
+        "avg_transit_days", "n_transfers",
+    ]].copy()
+    # Guard against residual dupes: sum the count buckets, weighted-avg the transit days
+    rep = rep.groupby(["sku", "centro"], as_index=False).agg(
+        units_in_transit=("units_in_transit", "sum"),
+        units_received_window=("units_received_window", "sum"),
+        avg_transit_days=("avg_transit_days", "mean"),
+        n_transfers=("n_transfers", "sum"),
+    )
+
+    weekly = weekly.merge(rep, on=["sku", "centro"], how="left")
+
+    # Zero out historical weeks to prevent lookahead leakage (same rationale as backorder).
+    if len(weekly):
+        historical = weekly["week"] < weekly["week"].max()
+        weekly.loc[historical, ["units_in_transit", "units_received_window", "n_transfers"]] = 0
+        weekly.loc[historical, "avg_transit_days"] = pd.NA
+
+    # Two-step fillna + astype to avoid pandas 3.x downcast FutureWarning
+    for col in ["units_in_transit", "units_received_window"]:
+        weekly[col] = weekly[col].fillna(0)
+        weekly[col] = weekly[col].astype(float)
+    weekly["n_transfers"] = weekly["n_transfers"].fillna(0)
+    weekly["n_transfers"] = weekly["n_transfers"].astype(int)
+    # avg_transit_days: keep NaN where there were no arrivals — model treats absence as missing
+    weekly["avg_transit_days"] = weekly["avg_transit_days"].astype(float)
+    return weekly
+
+
 def add_size_sales_share(weekly: pd.DataFrame, txn: pd.DataFrame, products: pd.DataFrame) -> pd.DataFrame:
     """Add each child SKU's historical volume share within its parent.
 
@@ -888,6 +943,19 @@ def build_features_for_brand(brand: str):
             weekly = add_backorder_features(weekly, backorder)
             matched = (weekly["open_po_units"] > 0).sum()
             print(f"  Backorder matched: {matched:,} / {len(weekly):,} rows "
+                  f"({matched/max(len(weekly),1):.1%})")
+
+    # Replenishment signal (inter-store transfers per SKU-centro from datawarehouse).
+    # Opt-in: skipped when replenishment_signal.parquet is absent.
+    repl_path = _raw_dir(brand) / "replenishment_signal.parquet"
+    if repl_path.exists():
+        replenishment = pd.read_parquet(repl_path)
+        if len(replenishment) > 0:
+            print(f"[{brand}] Adding replenishment features "
+                  f"({len(replenishment):,} (sku,centro) pairs)...")
+            weekly = add_replenishment_features(weekly, replenishment)
+            matched = (weekly["units_received_window"] > 0).sum()
+            print(f"  Replenishment matched: {matched:,} / {len(weekly):,} rows "
                   f"({matched/max(len(weekly),1):.1%})")
 
     # Weather features (Open-Meteo API, cached locally)
