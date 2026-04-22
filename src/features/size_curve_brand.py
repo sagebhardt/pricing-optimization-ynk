@@ -187,12 +187,26 @@ def build_size_availability(txn, products):
     core_expanded = expanded[expanded["talla"].isin(CORE_SIZES)]
 
     active_counts = expanded.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("active_sizes_4w")
-    core_active = core_expanded.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("core_sizes_active") if len(core_expanded) > 0 else pd.Series(dtype=int, name="core_sizes_active")
+    # Empty-core fallback must carry the same MultiIndex names as active_counts —
+    # otherwise pd.concat broadcasts against a default RangeIndex and reset_index()
+    # produces columns like level_0/level_1 instead of codigo_padre/centro/week,
+    # breaking the downstream merge with KeyError: 'codigo_padre'.
+    _weekly_idx = pd.MultiIndex.from_tuples([], names=["codigo_padre", "centro", "week"])
+    core_active = (
+        core_expanded.groupby(["codigo_padre", "centro", "week"])["talla"].nunique().rename("core_sizes_active")
+        if len(core_expanded) > 0
+        else pd.Series(dtype=int, name="core_sizes_active", index=_weekly_idx)
+    )
     weekly_agg = pd.concat([active_counts, core_active], axis=1).fillna(0).astype(int).reset_index()
 
     total_ever = size_sales.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("total_sizes_ever")
     core_sales = size_sales[size_sales["talla"].isin(CORE_SIZES)]
-    core_ever = core_sales.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("core_sizes_total") if len(core_sales) > 0 else pd.Series(dtype=int, name="core_sizes_total")
+    _ever_idx = pd.MultiIndex.from_tuples([], names=["codigo_padre", "centro"])
+    core_ever = (
+        core_sales.groupby(["codigo_padre", "centro"])["talla"].nunique().rename("core_sizes_total")
+        if len(core_sales) > 0
+        else pd.Series(dtype=int, name="core_sizes_total", index=_ever_idx)
+    )
     ever_agg = pd.concat([total_ever, core_ever], axis=1).fillna(0).astype(int).reset_index()
 
     result = weekly_agg.merge(ever_agg, on=["codigo_padre", "centro"], how="left")
