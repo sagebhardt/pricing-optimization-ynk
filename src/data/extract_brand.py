@@ -132,7 +132,7 @@ def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
         query = f"""
             SELECT
                 s.fecha,
-                ctr.tienda_codigo_sap || '-' || ctr.tienda_nombre AS store_id,
+                ctr.tienda_nombre AS store_id,
                 p.sku_sap AS sku,
                 COALESCE(s.stock, 0) AS stock_on_hand_units,
                 COALESCE(s.stock_transito, 0) AS stock_in_transit_units,
