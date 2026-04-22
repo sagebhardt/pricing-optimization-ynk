@@ -13,7 +13,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import pandas as pd
 import psycopg2
 from pathlib import Path
-from config.database import DB_CONFIG, BRANDS, EXCLUDE_SKUS, STOCK_TABLES, DW_STOCK_BANNERS
+from config.database import (
+    DB_CONFIG, BRANDS, EXCLUDE_SKUS, STOCK_TABLES,
+    DW_STOCK_BANNERS, DW_BRAND_BANNERS,
+)
+from config.price_lists import classify_price_list
 
 
 def get_connection():
@@ -157,6 +161,44 @@ def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
             except Exception: pass
 
 
+def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
+    """Pull folio_sii → lista_precio.descripcion mapping from DW for given banners.
+
+    Uses `datawarehouse.view_ventas` (a populated materialized view indexed on fecha)
+    joined to `factura_cabecera` via doc_facturacion (indexed) and `lista_precio`.
+    Returns a DataFrame with columns [folio, list_name, list_category] or None on error.
+    The caller merges this into transactions on folio.
+    """
+    if not banner_names:
+        return None
+    conn = None
+    try:
+        conn = get_connection()
+        placeholders = ",".join(["%s"] * len(banner_names))
+        query = f"""
+            SELECT DISTINCT
+                vv.folio_sii AS folio,
+                lp.descripcion AS list_name
+            FROM datawarehouse.view_ventas vv
+            JOIN datawarehouse.factura_cabecera fc ON vv.doc_facturacion = fc.doc_facturacion
+            JOIN datawarehouse.lista_precio lp ON fc.lista_precio_id = lp.lista_precio_id
+            WHERE vv.fecha >= CURRENT_DATE - INTERVAL '{int(lookback_years)} years'
+              AND vv.organizacion_ventas_nombre IN ({placeholders})
+              AND vv.folio_sii IS NOT NULL
+        """
+        df = pd.read_sql(query, conn, params=tuple(banner_names))
+        # Always add list_category column (even on empty result) for consumer contract
+        df["list_category"] = df["list_name"].apply(classify_price_list) if len(df) > 0 else pd.Series(dtype=object)
+        return df
+    except Exception as e:
+        print(f"  datawarehouse list-name extraction skipped: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
 def _extract_costs_from_ti(parent_skus):
     """Legacy fallback: cost from ti.productos with USD/CLP 1000x heuristic.
 
@@ -239,6 +281,21 @@ def extract_brand(brand_name: str):
           )
     """, conn)
     txn["fecha"] = pd.to_datetime(txn["fecha"])
+
+    # 2b. Enrich with lista_precio from DW (folio == folio_sii).
+    # Adds list_name + list_category columns so downstream can flag markdown periods
+    # without relying on price-deviation inference.
+    dw_banners = DW_BRAND_BANNERS.get(brand_name)
+    if dw_banners:
+        list_map = _extract_list_names_from_dw(dw_banners)
+        if list_map is not None and len(list_map) > 0:
+            txn["folio"] = txn["folio"].astype(str)
+            list_map["folio"] = list_map["folio"].astype(str)
+            txn = txn.merge(list_map, on="folio", how="left")
+            matched = txn["list_name"].notna().sum()
+            print(f"  Enriched {matched:,}/{len(txn):,} txns with lista_precio "
+                  f"({100*matched/max(len(txn),1):.0f}%)")
+
     txn.to_parquet(raw_dir / "transactions.parquet", index=False)
     print(f"  {len(txn):,} transactions (filtered {n_before - len(txn)} non-brand SKUs)")
     print(f"  Date range: {txn['fecha'].min().date()} to {txn['fecha'].max().date()}")

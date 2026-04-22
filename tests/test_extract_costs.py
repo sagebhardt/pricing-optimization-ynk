@@ -134,3 +134,39 @@ class TestExtractStockFromDw:
     def test_returns_none_on_db_error(self):
         with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
             assert eb._extract_stock_from_dw(["NI1234"], [1, 4]) is None
+
+
+class TestExtractListNamesFromDw:
+    def test_empty_banners_returns_none(self):
+        assert eb._extract_list_names_from_dw([]) is None
+
+    def test_returns_dataframe_with_categories(self):
+        raw = pd.DataFrame({
+            "folio": ["100001", "100002", "100003"],
+            "list_name": ["Hoka tiendas", "Liquidación Bold", "Bamers Outlets"],
+        })
+        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+             patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
+            out = eb._extract_list_names_from_dw(["Hoka"])
+        query, _ = read_sql.call_args[0]
+        assert "datawarehouse.view_ventas" in query
+        assert "datawarehouse.factura_cabecera" in query
+        assert "datawarehouse.lista_precio" in query
+        assert "doc_facturacion" in query
+        assert "folio_sii" in query
+        # list_category should have been added
+        assert list(out["list_category"]) == ["retail", "liquidacion", "outlet"]
+
+    def test_empty_result_still_returns_empty_df_not_none(self):
+        raw = pd.DataFrame(columns=["folio", "list_name"])
+        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+             patch("src.data.extract_brand.pd.read_sql", return_value=raw):
+            out = eb._extract_list_names_from_dw(["Hoka"])
+        assert out is not None
+        assert len(out) == 0
+        # Consumer contract: list_category must be present even when empty
+        assert "list_category" in out.columns
+
+    def test_returns_none_on_db_error(self):
+        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+            assert eb._extract_list_names_from_dw(["Hoka"]) is None

@@ -96,6 +96,16 @@ DW_STOCK_BANNERS = {
     "BELSPORT": [1, 4],  # Belsport + Belsport Kids
 }
 
+# Brand → list of organizacion_ventas_nombre values in datawarehouse.view_ventas.
+# Used to pull markdown/lista_precio enrichment for transactions.
+DW_BRAND_BANNERS = {
+    "HOKA": ["Hoka"],
+    "BOLD": ["Bold"],
+    "BAMERS": ["Bamers"],
+    "OAKLEY": ["Oakley"],
+    "BELSPORT": ["Belsport", "Belsport Kids"],
+}
+
 # Backwards compatibility
 HOKA_STORES = BRANDS["HOKA"]["stores_active"]
 HOKA_STORES_ALL = BRANDS["HOKA"]["stores_all"]
