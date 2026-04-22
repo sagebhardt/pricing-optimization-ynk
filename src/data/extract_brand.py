@@ -257,6 +257,74 @@ def _extract_backorder_from_dw(parent_skus, banner_names, lookback_months: int =
             except Exception: pass
 
 
+def _extract_replenishment_from_dw(parent_skus, banner_names, lookback_weeks: int = 12):
+    """Pull inter-store transfer signal per (sku, destination centro) from DW.
+
+    Reads raw `traspaso_cabecera` + `traspaso_detalle` tables (rather than the
+    string-joined `view_traspasos_detalle`) so we can filter cleanly and use
+    integer-id indexed joins. Banner scope via venta_organizacion name lookup.
+
+    Returns DataFrame with columns:
+      cod_padre, sku, centro, units_in_transit, units_received_window,
+      avg_transit_days, n_transfers
+    or None on error. `banner_names` same list shape as DW_BRAND_BANNERS.
+    """
+    if not parent_skus or not banner_names:
+        return None
+    conn = None
+    try:
+        conn = get_connection()
+        sku_ph = ",".join(["%s"] * len(parent_skus))
+        ban_ph = ",".join(["%s"] * len(banner_names))
+        query = f"""
+            WITH brand_transfers AS (
+                SELECT td.producto_id,
+                       td.centro_destino_id,
+                       tc.fecha_creacion,
+                       tc.fecha_recepcion,
+                       td.unidades
+                FROM datawarehouse.traspaso_detalle td
+                JOIN datawarehouse.traspaso_cabecera tc
+                     ON td.traspaso_cabecera_id = tc.traspaso_cabecera_id
+                JOIN datawarehouse.producto p ON td.producto_id = p.producto_id
+                JOIN datawarehouse.centro ctr ON td.centro_destino_id = ctr.centro_id
+                JOIN datawarehouse.venta_organizacion vo
+                     ON ctr.venta_organizacion_id = vo.venta_organizacion_id
+                WHERE p.sku_padre_sap IN ({sku_ph})
+                  AND vo.organizacion_ventas_nombre IN ({ban_ph})
+                  AND tc.fecha_creacion >= CURRENT_DATE - INTERVAL '{int(lookback_weeks)} weeks'
+            )
+            SELECT p.sku_padre_sap AS cod_padre,
+                   p.sku_sap AS sku,
+                   ctr.tienda_codigo_sap AS centro,
+                   SUM(CASE WHEN bt.fecha_recepcion IS NULL THEN bt.unidades ELSE 0 END)
+                       AS units_in_transit,
+                   SUM(CASE WHEN bt.fecha_recepcion IS NOT NULL THEN bt.unidades ELSE 0 END)
+                       AS units_received_window,
+                   AVG(CASE WHEN bt.fecha_recepcion IS NOT NULL
+                            THEN (bt.fecha_recepcion - bt.fecha_creacion) END)
+                       AS avg_transit_days,
+                   COUNT(*) AS n_transfers
+            FROM brand_transfers bt
+            JOIN datawarehouse.producto p ON bt.producto_id = p.producto_id
+            JOIN datawarehouse.centro ctr ON bt.centro_destino_id = ctr.centro_id
+            GROUP BY p.sku_padre_sap, p.sku_sap, ctr.tienda_codigo_sap
+            -- Keep groups where EITHER bucket has net-positive units. A pair can have
+            -- non-zero in-transit even if received-minus-reversals nets to zero overall.
+            HAVING SUM(CASE WHEN bt.fecha_recepcion IS NULL THEN bt.unidades ELSE 0 END) > 0
+                OR SUM(CASE WHEN bt.fecha_recepcion IS NOT NULL THEN bt.unidades ELSE 0 END) > 0
+        """
+        params = tuple(parent_skus) + tuple(banner_names)
+        return pd.read_sql(query, conn, params=params)
+    except Exception as e:
+        print(f"  datawarehouse replenishment extraction skipped: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
 def _extract_costs_from_ti(parent_skus):
     """Legacy fallback: cost from ti.productos with USD/CLP 1000x heuristic.
 
@@ -495,6 +563,19 @@ def extract_brand(brand_name: str):
             bo_df.to_parquet(raw_dir / "backorder_signal.parquet", index=False)
             print(f"  Generated backorder_signal.parquet: {len(bo_df):,} open lines, "
                   f"{bo_df['open_qty'].sum():,.0f} units across {bo_df['centro'].nunique()} centros")
+
+    # 12. Replenishment signal — inter-store transfers to this brand's centros.
+    # Tells the model which destinations are actively being replenished and how long transit takes.
+    if parent_skus and dw_banners_names:
+        rep_df = _extract_replenishment_from_dw(parent_skus, dw_banners_names)
+        if rep_df is not None and len(rep_df) > 0:
+            rep_df.to_parquet(raw_dir / "replenishment_signal.parquet", index=False)
+            in_transit = rep_df["units_in_transit"].sum()
+            received = rep_df["units_received_window"].sum()
+            n_centros = rep_df["centro"].nunique()
+            print(f"  Generated replenishment_signal.parquet: {len(rep_df):,} (sku,centro) pairs, "
+                  f"{int(in_transit):,} units in transit + {int(received):,} received "
+                  f"(12w) across {n_centros} centros")
 
     print(f"\n--- {brand_name} Extraction Complete ---")
     print(f"  Transactions: {len(txn):,}")

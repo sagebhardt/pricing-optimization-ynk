@@ -206,3 +206,45 @@ class TestExtractBackorderFromDw:
     def test_returns_none_on_db_error(self):
         with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
             assert eb._extract_backorder_from_dw(["HK"], ["Hoka"]) is None
+
+
+class TestExtractReplenishmentFromDw:
+    def test_empty_parents_returns_none(self):
+        assert eb._extract_replenishment_from_dw([], ["Hoka"]) is None
+
+    def test_empty_banners_returns_none(self):
+        assert eb._extract_replenishment_from_dw(["HK1"], []) is None
+
+    def test_returns_dataframe_on_success(self):
+        raw = pd.DataFrame({
+            "cod_padre": ["HK1162012CYG"],
+            "sku": ["HK1162012CYG090"],
+            "centro": ["7501"],
+            "units_in_transit": [12],
+            "units_received_window": [45],
+            "avg_transit_days": [3.5],
+            "n_transfers": [8],
+        })
+        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+             patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
+            out = eb._extract_replenishment_from_dw(["HK1162012CYG"], ["Hoka"])
+        query, _ = read_sql.call_args[0]
+        assert "traspaso_detalle" in query
+        assert "traspaso_cabecera" in query
+        # Banner filter must go via venta_organizacion name (not raw ID),
+        # so all brands can share the helper
+        assert "organizacion_ventas_nombre" in query
+        # Lookback window must remain to guard scans
+        assert "fecha_creacion" in query and "CURRENT_DATE" in query
+        # HAVING must guard each bucket separately so a net-zero (in-transit + reversal)
+        # pair isn't silently dropped when in-transit is still non-zero.
+        assert "HAVING" in query.upper()
+        assert query.count("fecha_recepcion IS NULL") >= 2  # select + having
+        # Output contract includes cod_padre for parent-SKU joins downstream
+        assert "sku_padre_sap" in query
+        assert read_sql.call_args[1]["params"] == ("HK1162012CYG", "Hoka")
+        pd.testing.assert_frame_equal(out, raw)
+
+    def test_returns_none_on_db_error(self):
+        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+            assert eb._extract_replenishment_from_dw(["HK1"], ["Hoka"]) is None
