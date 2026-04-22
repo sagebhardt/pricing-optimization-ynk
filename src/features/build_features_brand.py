@@ -73,6 +73,25 @@ def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
         sales["codigo_descuento"].notna() & (sales["codigo_descuento"] != "")
     ) if "codigo_descuento" in sales.columns else False
 
+    # Tag credit notes (returns/exchanges coded as sales) — distort price signal
+    sales["is_credit_note"] = (
+        sales["tipo_documento"].str.contains("NOTA DE CREDITO", case=False, na=False)
+    ) if "tipo_documento" in sales.columns else False
+
+    # Tag extreme discounts (>50% off list) — likely employee/internal sales without coupon code
+    # BOLD: 10.7% of no-coupon transactions have >30% discount, many at 50%+ (employee pricing)
+    sales["is_extreme_discount"] = False
+    mask_has_list = sales["precio_lista"] > 0
+    if mask_has_list.any():
+        disc_pct = sales.loc[mask_has_list, "descuento"] / sales.loc[mask_has_list, "precio_lista"]
+        sales.loc[mask_has_list, "is_extreme_discount"] = disc_pct > 0.50
+
+    # Tag liquidación / outlet transactions from datawarehouse lista_precio enrichment.
+    # Those lists carry markdown regime prices that distort the regular-retail price signal.
+    sales["is_markdown_list"] = (
+        sales["list_category"].isin(["liquidacion", "outlet"])
+    ) if "list_category" in sales.columns else False
+
     # Weekly sales aggregation — volume from ALL channels (demand is real)
     weekly = (
         sales.groupby(["sku", "centro", "week"])
@@ -86,12 +105,25 @@ def build_weekly_sales(txn: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Price features from CLEAN transactions only:
-    # Exclude C&C (ecomm pricing) + coupon codes (influencer, employee, Entel discounts)
+    # Exclude C&C (ecomm pricing) + coupon codes + credit notes + extreme discounts (>50%)
     # These contaminate price signal — 87% of BAMERS coupon weeks had >10% price distortion
-    clean_sales = sales[~sales["is_click_collect"] & ~sales["has_coupon"]]
+    # BOLD: employee discounts (no coupon code, 50%+ off) were distorting 10.7% of transactions
+    clean_sales = sales[
+        ~sales["is_click_collect"] & ~sales["has_coupon"] &
+        ~sales["is_credit_note"] & ~sales["is_extreme_discount"] &
+        ~sales["is_markdown_list"]
+    ]
     n_excluded = len(sales) - len(clean_sales)
     if n_excluded > 0:
-        print(f"    Price features: excluded {n_excluded:,} txn ({n_excluded/len(sales)*100:.1f}%) — C&C + coupons")
+        n_cc = sales["is_click_collect"].sum()
+        n_coupon = sales["has_coupon"].sum()
+        n_credit = sales["is_credit_note"].sum()
+        n_extreme = sales["is_extreme_discount"].sum()
+        n_markdown = sales["is_markdown_list"].sum()
+        # Flags can overlap (e.g. a liquidación row at >50% off is both markdown and extreme).
+        # per-flag counts below may sum to more than n_excluded.
+        print(f"    Price features: excluded {n_excluded:,} txn ({n_excluded/len(sales)*100:.1f}%) — "
+              f"C&C:{n_cc:,} coupon:{n_coupon:,} credit:{n_credit:,} extreme:{n_extreme:,} markdown:{n_markdown:,}")
     if len(clean_sales) > 0:
         retail_prices = (
             clean_sales.groupby(["sku", "centro", "week"])

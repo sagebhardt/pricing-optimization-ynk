@@ -58,7 +58,20 @@ def prepare_elasticity_data(brand: str):
     sales["has_coupon"] = (
         sales["codigo_descuento"].notna() & (sales["codigo_descuento"] != "")
     ) if "codigo_descuento" in sales.columns else False
-    retail = sales[~sales["is_cc"] & ~sales["has_coupon"]]
+    sales["is_credit_note"] = (
+        sales["tipo_documento"].str.contains("NOTA DE CREDITO", case=False, na=False)
+    ) if "tipo_documento" in sales.columns else False
+    sales["is_extreme_discount"] = False
+    mask_has_list = sales["precio_lista"] > 0
+    if mask_has_list.any():
+        disc_pct = sales.loc[mask_has_list, "descuento"] / sales.loc[mask_has_list, "precio_lista"]
+        sales.loc[mask_has_list, "is_extreme_discount"] = disc_pct > 0.50
+    # Markdown regime via datawarehouse lista_precio — conflates elasticity if included
+    sales["is_markdown_list"] = (
+        sales["list_category"].isin(["liquidacion", "outlet"])
+    ) if "list_category" in sales.columns else False
+    retail = sales[~sales["is_cc"] & ~sales["has_coupon"] & ~sales["is_credit_note"]
+                   & ~sales["is_extreme_discount"] & ~sales["is_markdown_list"]]
 
     # Effective price per unit (retail-only to avoid ecomm discount contamination)
     retail = retail.copy()
@@ -78,7 +91,10 @@ def prepare_elasticity_data(brand: str):
         .reset_index()
     )
 
-    weekly = vol.merge(prices, on=["sku", "centro", "week"], how="inner")
+    # Left join: markdown-only SKU-store-weeks have volume but no retail price;
+    # they get dropped by the avg_price>0 filter below. Left join makes that intent
+    # explicit (vs. inner, which silently drops them at the join step).
+    weekly = vol.merge(prices, on=["sku", "centro", "week"], how="left")
 
     # Add product hierarchy
     product_map = products[["material", "codigo_padre", "primera_jerarquia",
