@@ -199,6 +199,64 @@ def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
             except Exception: pass
 
 
+def _extract_backorder_from_dw(parent_skus, banner_names, lookback_months: int = 12):
+    """Pull open purchase-order units per (sku, centro) from DW.
+
+    Uses `datawarehouse.view_ordenes_compra_detalle` (PO lines) LEFT JOINed to
+    aggregated `view_recepcion_orden_compra_resumen` (receipts), both keyed by
+    (oc_numero, sku_sap). Computes (ordered - received) > 0 as the open/backorder
+    quantity; status column values aren't inspected, so this stays robust to
+    SAP status-code drift.
+
+    Returns DataFrame [cod_padre, sku, centro, open_qty, earliest_delivery,
+    n_open_pos] or None on error.
+    """
+    if not parent_skus or not banner_names:
+        return None
+    conn = None
+    try:
+        conn = get_connection()
+        sku_ph = ",".join(["%s"] * len(parent_skus))
+        ban_ph = ",".join(["%s"] * len(banner_names))
+        query = f"""
+            WITH po_detail AS (
+                SELECT vo.oc_numero, vo.tienda_codigo_sap, vo.sku_sap,
+                       vo.cantidad, vo.fecha_entrega, p.sku_padre_sap
+                FROM datawarehouse.view_ordenes_compra_detalle vo
+                JOIN datawarehouse.producto p ON vo.sku_sap = p.sku_sap
+                WHERE vo.banner IN ({ban_ph})
+                  AND vo.fecha_creacion >= CURRENT_DATE - INTERVAL '{int(lookback_months)} months'
+                  AND p.sku_padre_sap IN ({sku_ph})
+            ),
+            received AS (
+                SELECT vr.oc_numero, vr.sku_sap,
+                       SUM(vr.cantidad_recibida) AS received_qty
+                FROM datawarehouse.view_recepcion_orden_compra_resumen vr
+                WHERE vr.oc_numero IN (SELECT DISTINCT oc_numero FROM po_detail)
+                GROUP BY vr.oc_numero, vr.sku_sap
+            )
+            SELECT pd.sku_padre_sap AS cod_padre,
+                   pd.sku_sap AS sku,
+                   pd.tienda_codigo_sap AS centro,
+                   SUM(pd.cantidad - COALESCE(r.received_qty, 0)) AS open_qty,
+                   MIN(pd.fecha_entrega) AS earliest_delivery,
+                   COUNT(*) AS n_open_pos
+            FROM po_detail pd
+            LEFT JOIN received r ON pd.oc_numero = r.oc_numero AND pd.sku_sap = r.sku_sap
+            GROUP BY pd.sku_padre_sap, pd.sku_sap, pd.tienda_codigo_sap
+            HAVING SUM(pd.cantidad - COALESCE(r.received_qty, 0)) > 0
+        """
+        params = tuple(banner_names) + tuple(parent_skus)
+        return pd.read_sql(query, conn, params=params)
+    except Exception as e:
+        print(f"  datawarehouse backorder extraction skipped: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
 def _extract_costs_from_ti(parent_skus):
     """Legacy fallback: cost from ti.productos with USD/CLP 1000x heuristic.
 
@@ -427,6 +485,16 @@ def extract_brand(brand_name: str):
             pct = 100 * len(op_df) / len(parent_skus)
             print(f"  Generated official_prices.parquet: {len(op_df):,} / {len(parent_skus):,} parents "
                   f"({pct:.0f}% coverage from datawarehouse)")
+
+    # 11. Backorder signal — open PO units per (sku, centro) from datawarehouse.
+    # Net-new feature: enables pricing to see incoming supply when stock is low.
+    dw_banners_names = DW_BRAND_BANNERS.get(brand_name)
+    if parent_skus and dw_banners_names:
+        bo_df = _extract_backorder_from_dw(parent_skus, dw_banners_names)
+        if bo_df is not None and len(bo_df) > 0:
+            bo_df.to_parquet(raw_dir / "backorder_signal.parquet", index=False)
+            print(f"  Generated backorder_signal.parquet: {len(bo_df):,} open lines, "
+                  f"{bo_df['open_qty'].sum():,.0f} units across {bo_df['centro'].nunique()} centros")
 
     print(f"\n--- {brand_name} Extraction Complete ---")
     print(f"  Transactions: {len(txn):,}")

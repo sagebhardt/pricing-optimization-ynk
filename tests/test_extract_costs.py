@@ -170,3 +170,39 @@ class TestExtractListNamesFromDw:
     def test_returns_none_on_db_error(self):
         with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
             assert eb._extract_list_names_from_dw(["Hoka"]) is None
+
+
+class TestExtractBackorderFromDw:
+    def test_empty_parents_returns_none(self):
+        assert eb._extract_backorder_from_dw([], ["Hoka"]) is None
+
+    def test_empty_banners_returns_none(self):
+        assert eb._extract_backorder_from_dw(["HKABC"], []) is None
+
+    def test_returns_dataframe_on_success(self):
+        raw = pd.DataFrame({
+            "cod_padre": ["HK1099673BBLC"],
+            "sku": ["HK1099673BBLC080"],
+            "centro": ["7501"],
+            "open_qty": [12],
+            "earliest_delivery": ["2026-05-15"],
+            "n_open_pos": [2],
+        })
+        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+             patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
+            out = eb._extract_backorder_from_dw(["HK1099673BBLC"], ["Hoka"])
+        query, _ = read_sql.call_args[0]
+        assert "view_ordenes_compra_detalle" in query
+        assert "view_recepcion_orden_compra_resumen" in query
+        assert "LEFT JOIN received" in query
+        # Lookback filter must remain — guards against unbounded scans
+        assert "fecha_creacion" in query and "CURRENT_DATE" in query
+        # HAVING on aggregated sum — guards against WHERE-vs-HAVING regression
+        assert "HAVING" in query.upper() and "SUM(" in query
+        # params: banner_names first, then parent_skus
+        assert read_sql.call_args[1]["params"] == ("Hoka", "HK1099673BBLC")
+        pd.testing.assert_frame_equal(out, raw)
+
+    def test_returns_none_on_db_error(self):
+        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+            assert eb._extract_backorder_from_dw(["HK"], ["Hoka"]) is None
