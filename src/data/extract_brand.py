@@ -162,12 +162,17 @@ def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
 
 
 def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
-    """Pull folio_sii → lista_precio.descripcion mapping from DW for given banners.
+    """Pull folio → lista_precio.descripcion mapping from DW for given banners.
 
     Uses `datawarehouse.view_ventas` (a populated materialized view indexed on fecha)
     joined to `factura_cabecera` via doc_facturacion (indexed) and `lista_precio`.
-    Returns a DataFrame with columns [folio, list_name, list_category] or None on error.
-    The caller merges this into transactions on folio.
+    Returns DataFrame with columns [folio, centro, list_name, list_category] or None.
+
+    folio_sii in DW is prefixed with the POS register code ("039-30670736"),
+    while ventas.ventas_por_vendedor.folio stores only the trailing numeric part
+    ("30670736"). The join key is therefore the stripped trailing part, and the
+    composite (folio, centro) key disambiguates across stores that can share
+    the same numeric folio sequence.
     """
     if not banner_names:
         return None
@@ -177,7 +182,8 @@ def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
         placeholders = ",".join(["%s"] * len(banner_names))
         query = f"""
             SELECT DISTINCT
-                vv.folio_sii AS folio,
+                COALESCE(NULLIF(SPLIT_PART(vv.folio_sii, '-', 2), ''), vv.folio_sii) AS folio,
+                vv.tienda_codigo_sap AS centro,
                 lp.descripcion AS list_name
             FROM datawarehouse.view_ventas vv
             JOIN datawarehouse.factura_cabecera fc ON vv.doc_facturacion = fc.doc_facturacion
@@ -408,22 +414,25 @@ def extract_brand(brand_name: str):
     """, conn)
     txn["fecha"] = pd.to_datetime(txn["fecha"])
 
-    # 2b. Enrich with lista_precio from DW (folio == folio_sii).
-    # Adds list_name + list_category columns so downstream can flag markdown periods
-    # without relying on price-deviation inference.
+    # 2b. Enrich with lista_precio from DW via (folio, centro) composite key.
+    # folio_sii in DW has a "XXX-" register prefix (e.g., "039-30670736") stripped
+    # on the SQL side to match ventas.ventas_por_vendedor.folio's plain numeric form.
+    # Adds list_name + list_category for downstream markdown filtering.
     dw_banners = DW_BRAND_BANNERS.get(brand_name)
     if dw_banners:
         list_map = _extract_list_names_from_dw(dw_banners)
         if list_map is not None and len(list_map) > 0:
             txn["folio"] = txn["folio"].astype(str)
+            txn["centro"] = txn["centro"].astype(str)
             list_map["folio"] = list_map["folio"].astype(str)
-            txn = txn.merge(list_map, on="folio", how="left")
+            list_map["centro"] = list_map["centro"].astype(str)
+            txn = txn.merge(list_map, on=["folio", "centro"], how="left")
             matched = txn["list_name"].notna().sum()
             print(f"  Enriched {matched:,}/{len(txn):,} txns with lista_precio "
                   f"({100*matched/max(len(txn),1):.0f}%)")
 
     txn.to_parquet(raw_dir / "transactions.parquet", index=False)
-    print(f"  {len(txn):,} transactions (filtered {n_before - len(txn)} non-brand SKUs)")
+    print(f"  {len(txn):,} transactions")
     print(f"  Date range: {txn['fecha'].min().date()} to {txn['fecha'].max().date()}")
 
     # 3. Stores

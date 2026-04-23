@@ -143,6 +143,7 @@ class TestExtractListNamesFromDw:
     def test_returns_dataframe_with_categories(self):
         raw = pd.DataFrame({
             "folio": ["100001", "100002", "100003"],
+            "centro": ["7501", "7501", "7502"],
             "list_name": ["Hoka tiendas", "Liquidación Bold", "Bamers Outlets"],
         })
         with patch.object(eb, "get_connection", return_value=MagicMock()), \
@@ -154,6 +155,11 @@ class TestExtractListNamesFromDw:
         assert "datawarehouse.lista_precio" in query
         assert "doc_facturacion" in query
         assert "folio_sii" in query
+        # Register-code prefix (e.g. "039-") must be stripped so the join key
+        # matches ventas.ventas_por_vendedor.folio (which has no prefix).
+        assert "SPLIT_PART" in query
+        # Composite key with centro disambiguates same folio number across stores
+        assert "tienda_codigo_sap AS centro" in query
         # list_category should have been added
         assert list(out["list_category"]) == ["retail", "liquidacion", "outlet"]
 
