@@ -82,17 +82,21 @@ BRANDS = {
 
 # Stock table locations (team uploads may land in different schemas/tables).
 # Set to None to fall through to DW_STOCK_BANNERS (datawarehouse.stock).
+# Observed on 2026-04-22 Cloud Run runs: public.stock_bold and public.stock_bamers
+# no longer exist ("relation does not exist"), so BOLD + BAMERS now pull from DW.
 STOCK_TABLES = {
     "HOKA": "public.stock_hoka",
-    "BOLD": "public.stock_bold",
-    "BAMERS": "public.stock_bamers",
+    "BOLD": None,
+    "BAMERS": None,
     "OAKLEY": "public.stock_oakley",
-    "BELSPORT": None,  # No legacy table — pulled from datawarehouse.stock
+    "BELSPORT": None,
 }
 
 # Brand → datawarehouse.venta_organizacion_id list, used when STOCK_TABLES[brand]
 # is None. Banner IDs confirmed via datawarehouse.venta_organizacion on 2026-04-22.
 DW_STOCK_BANNERS = {
+    "BOLD": [2],
+    "BAMERS": [16],
     "BELSPORT": [1, 4],  # Belsport + Belsport Kids
 }
 
