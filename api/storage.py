@@ -67,6 +67,20 @@ def _load_pricing_actions_impl(brand: str) -> dict:
             df["vendor_brand"] = df["parent_sku"].apply(lambda s: get_vendor_brand(s, brand))
         return df
 
+    def _normalize_nans(df):
+        """Convert NaN to JSON-safe values: None for numeric columns (so the UI's
+        `!= null` checks filter them out), "" for string columns (so template
+        interpolation doesn't render the word "null"). Replaces a plain fillna("")
+        that converted numeric NaN to "", breaking frontend type-dependent logic
+        like `.toFixed()` downstream.
+        """
+        for col in df.columns:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                df[col] = df[col].astype(object).where(df[col].notna(), None)
+            else:
+                df[col] = df[col].fillna("")
+        return df
+
     # Try GCS first
     if _use_gcs():
         try:
@@ -76,7 +90,7 @@ def _load_pricing_actions_impl(brand: str) -> dict:
             if blobs:
                 import io
                 content = blobs[-1].download_as_text()
-                df = pd.read_csv(io.StringIO(content)).fillna("")
+                df = _normalize_nans(pd.read_csv(io.StringIO(content)))
                 df = _ensure_vendor_brand(df, brand)
                 week = blobs[-1].name.split("pricing_actions_")[1].replace(".csv", "")
                 return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
@@ -89,7 +103,7 @@ def _load_pricing_actions_impl(brand: str) -> dict:
         files = sorted(actions_dir.glob("pricing_actions_*.csv"))
         if not files:
             return {"items": [], "week": None, "total": 0}
-        df = pd.read_csv(files[-1]).fillna("")
+        df = _normalize_nans(pd.read_csv(files[-1]))
         df = _ensure_vendor_brand(df, brand)
         week = files[-1].stem.replace("pricing_actions_", "")
         return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
@@ -245,6 +259,29 @@ def _load_competitor_summary_impl(brand: str) -> dict:
         },
         "items": items[:100],
     }
+
+
+def load_competitive_brief(brand: str) -> dict:
+    """Load competitive intelligence brief (opportunities, threats, movements)."""
+    return _cached(f"comp_brief:{brand}", lambda: _load_competitive_brief_impl(brand), ttl=1800)
+
+
+def _load_competitive_brief_impl(brand: str) -> dict:
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            blob = bucket.blob(f"competitors/{brand.lower()}/intelligence/competitive_brief.json")
+            if blob.exists():
+                return json.loads(blob.download_as_text())
+        except Exception:
+            pass
+
+    # Local fallback
+    fp = _BASE_DIR / "data" / "processed" / brand.lower() / "competitive_brief.json"
+    try:
+        return json.loads(fp.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"brand": brand, "available": False}
 
 
 def load_competitor_analytics(brand: str) -> dict:
