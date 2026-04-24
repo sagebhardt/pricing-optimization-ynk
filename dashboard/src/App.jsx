@@ -1719,6 +1719,7 @@ function App() {
           canApprove={canApprove}
           canExport={canExport}
           onDecide={setDecision}
+          onManual={(a) => setManualAction(a)}
           onBulkDecide={bulkDecide}
           onExport={() => setShowExportConfirm(true)}
           approvedCount={approvedItems.length}
@@ -1919,6 +1920,7 @@ function App() {
         <ManualPriceModal
           action={manualAction}
           brand={brand?.id}
+          grain={grain}
           authFetch={authFetch}
           onConfirm={(price, impact) => handleManualConfirm(manualAction, price, impact)}
           onClose={() => setManualAction(null)}

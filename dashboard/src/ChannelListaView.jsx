@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Check, X, Search, Filter, TrendingUp, TrendingDown, AlertTriangle, Download, Store } from 'lucide-react'
+import { Check, X, Search, Filter, TrendingUp, TrendingDown, AlertTriangle, Download, Store, DollarSign } from 'lucide-react'
 
 const PAGE_SIZE = 50
 
@@ -22,7 +22,7 @@ function parsePct(s) {
   return m ? parseFloat(m[1]) : 0
 }
 
-function ChannelRow({ action, status, onDecide, canApprove }) {
+function ChannelRow({ action, status, onDecide, onManual, canApprove }) {
   const key = `${action.parent_sku}-${action.channel}`
   const isApproved = ['approved', 'bm_approved', 'planner_approved', 'manual', 'bm_manual'].includes(status)
   const isRejected = ['rejected', 'bm_rejected', 'planner_rejected'].includes(status)
@@ -106,8 +106,11 @@ function ChannelRow({ action, status, onDecide, canApprove }) {
       <div className="ch-actions">
         {canApprove && !isDecided && (
           <>
-            <button className="ch-btn ch-btn--approve" onClick={() => onDecide(key, 'approved')} title="Aprobar">
+            <button className="ch-btn ch-btn--approve" onClick={() => onDecide(key, 'approved')} title="Aprobar recomendacion">
               <Check size={14} />
+            </button>
+            <button className="ch-btn ch-btn--manual" onClick={() => onManual(action)} title="Precio manual">
+              <DollarSign size={13} />
             </button>
             <button className="ch-btn ch-btn--reject" onClick={() => onDecide(key, 'rejected')} title="Rechazar">
               <X size={14} />
@@ -147,6 +150,7 @@ export default function ChannelListaView({
   canApprove,
   canExport,
   onDecide,
+  onManual,
   onBulkDecide,
   onExport,
   approvedCount,
@@ -313,6 +317,7 @@ export default function ChannelListaView({
                 action={a}
                 status={decisions[`${a.parent_sku}-${a.channel}`] || null}
                 onDecide={onDecide}
+                onManual={onManual}
                 canApprove={canApprove}
               />
             ))}
@@ -330,6 +335,7 @@ export default function ChannelListaView({
                 action={a}
                 status={decisions[`${a.parent_sku}-${a.channel}`] || null}
                 onDecide={onDecide}
+                onManual={onManual}
                 canApprove={canApprove}
               />
             ))}

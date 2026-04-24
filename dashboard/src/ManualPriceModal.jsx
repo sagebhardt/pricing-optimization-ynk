@@ -6,7 +6,7 @@ function clp(n) {
   return '$' + Math.round(Number(n)).toLocaleString('es-CL')
 }
 
-export default function ManualPriceModal({ action, brand, authFetch, onConfirm, onClose }) {
+export default function ManualPriceModal({ action, brand, grain = 'store', authFetch, onConfirm, onClose }) {
   const [inputPrice, setInputPrice] = useState('')
   const [impact, setImpact] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -31,15 +31,20 @@ export default function ManualPriceModal({ action, brand, authFetch, onConfirm, 
     }
     setLoading(true)
     setError(null)
+    const payload = {
+      brand: brand,
+      parent_sku: action.parent_sku,
+      manual_price: Number(price),
+      grain,
+    }
+    // At channel grain the impact call keys off channel (bm|ecomm),
+    // not store. Match the API's ImpactEstimatePayload contract.
+    if (grain === 'channel') payload.channel = action.channel
+    else payload.store = action.store
     authFetch('/estimate-impact', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        brand: brand,
-        parent_sku: action.parent_sku,
-        store: action.store,
-        manual_price: Number(price),
-      }),
+      body: JSON.stringify(payload),
     })
       .then(r => {
         if (!r.ok) throw new Error('Error estimando impacto')
@@ -47,7 +52,7 @@ export default function ManualPriceModal({ action, brand, authFetch, onConfirm, 
       })
       .then(data => { setImpact(data); setLoading(false) })
       .catch(e => { setError(e.message); setLoading(false) })
-  }, [brand, action, authFetch])
+  }, [brand, action, grain, authFetch])
 
   const handlePriceChange = (e) => {
     const val = e.target.value.replace(/[^\d]/g, '')
@@ -84,7 +89,11 @@ export default function ManualPriceModal({ action, brand, authFetch, onConfirm, 
         <div className="mp-product">
           <span className="mp-sku">{action.parent_sku}</span>
           <span className="mp-name">{action.product}</span>
-          <span className="mp-store">{action.store_name || action.store}</span>
+          <span className="mp-store">
+            {grain === 'channel'
+              ? `${action.channel === 'ecomm' ? 'Ecomm' : 'B&M'} — ${action.n_stores || 0} tiendas`
+              : (action.store_name || action.store)}
+          </span>
         </div>
 
         <div className="mp-current">
