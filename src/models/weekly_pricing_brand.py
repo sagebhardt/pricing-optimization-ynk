@@ -31,14 +31,16 @@ import json
 from pathlib import Path
 from datetime import datetime
 from config.database import BRANDS, EXCLUDE_STORES_PRICING
+from src.models.pricing_simulation import (
+    DISCOUNT_STEPS,
+    MIN_MARGIN_PCT,
+    PRICE_ANCHORS,
+    snap_to_price_anchor,
+    snap_to_discount_step,
+    compute_expected_velocity,
+)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-
-# Discount ladder (same across brands)
-DISCOUNT_STEPS = [0.0, 0.15, 0.20, 0.30, 0.40]
-
-# Minimum acceptable margin (%) after IVA — step back to shallower discount if breached
-MIN_MARGIN_PCT = 15
 
 CATEGORICAL_COLS = ["primera_jerarquia", "segunda_jerarquia", "genero", "grupo_etario"]
 EXCLUDE_COLS = [
@@ -86,98 +88,6 @@ def _load_store_names(brand: str) -> dict:
             return {}
     except (FileNotFoundError, KeyError):
         return {}
-
-
-# Cognitive price anchors — each sits just below a round psychological threshold.
-# Prices like 27,990 or 33,990 fall in "no man's land" (same mental bucket as 29,990/34,990)
-# and sacrifice margin without crossing a perceptual boundary.
-PRICE_ANCHORS = [
-    # < 10k (1k steps — small absolute values, every step matters)
-    990, 1990, 2990, 3990, 4990, 5990, 6990, 7990, 8990, 9990,
-    # 10k–20k (key thresholds: 10k, 15k, 20k)
-    12990, 14990, 16990, 19990,
-    # 20k–50k (5k steps)
-    24990, 29990, 34990, 39990, 44990, 49990,
-    # 50k–100k (5–10k steps)
-    54990, 59990, 69990, 79990, 89990, 99990,
-    # 100k–200k (10–20k steps)
-    109990, 119990, 129990, 139990, 149990, 169990, 199990,
-    # 200k+ (larger steps)
-    249990, 299990, 399990, 499990, 599990, 799990, 999990,
-]
-
-
-def snap_to_price_anchor(price, direction="down"):
-    """
-    Snap price to the nearest cognitive price anchor.
-
-    direction:
-      "down"    — largest anchor ≤ price (use for markdowns)
-      "up"      — smallest anchor ≥ price (use for price increases)
-      "nearest" — closest anchor (use for display / current price)
-    """
-    if price <= 0:
-        return 0
-
-    # Prices above our table: fall back to 10k-step rounding
-    if price > PRICE_ANCHORS[-1]:
-        step = 10000
-        if direction == "down":
-            return int(price // step) * step - 10
-        elif direction == "up":
-            return (int(price // step) + 1) * step - 10
-        else:
-            return int(round(price / step) * step - 10)
-
-    if direction == "down":
-        valid = [a for a in PRICE_ANCHORS if a <= price]
-        return valid[-1] if valid else PRICE_ANCHORS[0]
-    elif direction == "up":
-        valid = [a for a in PRICE_ANCHORS if a >= price]
-        return valid[0] if valid else PRICE_ANCHORS[-1]
-    else:  # nearest
-        return min(PRICE_ANCHORS, key=lambda a: abs(a - price))
-
-
-def snap_to_discount_step(discount_pct):
-    """Snap a continuous discount % to the actual discount ladder."""
-    if discount_pct < 0.07:
-        return 0.0
-    best = min(DISCOUNT_STEPS, key=lambda s: abs(s - discount_pct))
-    # Don't snap down to 0 if model suggests meaningful discount
-    if best == 0.0 and discount_pct >= 0.07:
-        return 0.15
-    return best
-
-
-def compute_expected_velocity(current_vel, current_disc, new_disc, elasticity):
-    """
-    Estimate weekly units at new price point.
-    Uses elasticity where available, falls back to historical lift patterns.
-    """
-    if current_vel <= 0:
-        return 0.5  # Minimum expected
-
-    if new_disc <= current_disc:
-        return current_vel  # Not deepening discount, no lift expected
-
-    # True price change %: going from 20% off to 30% off is a 12.5% price drop, not 10%
-    price_change_pct = (new_disc - current_disc) / max(1 - current_disc, 0.01)
-
-    if elasticity is not None and elasticity < -0.3:
-        # Use elasticity: price change % -> volume change %
-        volume_change = -price_change_pct * elasticity  # Elasticity is negative, price_change positive -> positive lift
-        return max(current_vel * (1 + volume_change), 0.5)
-    else:
-        # Empirical fallback: observed lift patterns
-        lift_by_step = {
-            0.15: 1.8,   # 15% discount -> ~80% more units
-            0.20: 2.2,   # 20% -> ~120% more
-            0.30: 3.0,   # 30% -> ~200% more
-            0.40: 4.0,   # 40% -> ~300% more
-        }
-        lift = lift_by_step.get(new_disc, 1 + price_change_pct * 5)
-        return max(current_vel * lift, 0.5)
 
 
 def classify_urgency(row):

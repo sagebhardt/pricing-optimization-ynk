@@ -5,7 +5,9 @@ import StoreSidebar from './StoreSidebar'
 import ManualPriceModal from './ManualPriceModal'
 import ChainViewModal from './ChainViewModal'
 import PlannerQueue from './PlannerQueue'
+import SimulatorModal from './SimulatorModal'
 import OverviewDashboard from './OverviewDashboard'
+import ChannelListaView from './ChannelListaView'
 import './App.css'
 
 const BRANDS = [
@@ -15,6 +17,10 @@ const BRANDS = [
   { id: 'oakley', label: 'OAKLEY', endpoint: '/pricing-actions?brand=oakley' },
   { id: 'belsport', label: 'BELSPORT', endpoint: '/pricing-actions?brand=belsport' },
 ]
+
+// Brands whose pipeline emits per-channel actions (mirrors CHANNEL_GRAIN_BRANDS
+// in config/database.py). A Canal/Por-tienda sub-toggle is shown for these only.
+const CHANNEL_GRAIN_BRANDS = new Set(['bold', 'bamers', 'belsport'])
 
 const BRAND_STATS = [
   { id: 'hoka',   label: 'HOKA',   actions: 100,   skus: '3K',  stores: 4  },
@@ -550,6 +556,7 @@ function App() {
   const [showAdmin, setShowAdmin] = useState(false)
   const [showExportConfirm, setShowExportConfirm] = useState(false)
   const [showAnalytics, setShowAnalytics] = useState(false)
+  const [showSimulator, setShowSimulator] = useState(false)
   const [viewMode, setViewMode] = useState('list')  // 'list' | 'tiendas' | 'marcas'
   const [filterVendor, setFilterVendor] = useState(null)
   const [manualAction, setManualAction] = useState(null)  // action object for ManualPriceModal
@@ -569,6 +576,12 @@ function App() {
   const canExport = user?.permissions?.includes('export')
   const canAudit = user?.permissions?.includes('audit')
   const [showPlannerQueue, setShowPlannerQueue] = useState(false)
+  // 'store' (per-parent x store, legacy) or 'channel' (per-parent x bm/ecomm).
+  // Default is 'channel' because the whole point of the restructure is to
+  // reduce action volume for BMs — the legacy per-store view is now the
+  // escape hatch, not the primary. Brands not in CHANNEL_GRAIN_BRANDS are
+  // always forced to 'store' (see loadBrand).
+  const [grain, setGrain] = useState('channel')
 
   // Brands visible to this user
   const visibleBrands = useMemo(() => {
@@ -642,7 +655,7 @@ function App() {
 
   // ── Data loading ──
 
-  const loadBrand = useCallback((b) => {
+  const loadBrand = useCallback((b, grainOverride) => {
     setLoading(true)
     setError(null)
     setActions([])
@@ -660,11 +673,24 @@ function App() {
     setPage(1)
     setBrand(b)
 
+    // A brand that doesn't publish channel-grain data can never be in channel mode.
+    const effectiveGrain = CHANNEL_GRAIN_BRANDS.has(b.id)
+      ? (grainOverride ?? grain)
+      : 'store'
+    if (effectiveGrain !== grain) setGrain(effectiveGrain)
+
+    const actionsUrl = effectiveGrain === 'channel'
+      ? `/pricing-actions?brand=${b.id}&grain=channel`
+      : b.endpoint
+    const decisionsUrl = effectiveGrain === 'channel'
+      ? `/decisions?brand=${b.id}&grain=channel`
+      : `/decisions?brand=${b.id}`
+
     Promise.all([
-      authFetch(b.endpoint).then(r => r.json()),
+      authFetch(actionsUrl).then(r => r.json()),
       authFetch(`/alerts?brand=${b.id}&min_attrition=0.3`).then(r => r.json()),
       authFetch(`/model/info?brand=${b.id}`).then(r => r.json()),
-      authFetch(`/decisions?brand=${b.id}`).then(r => r.json()),
+      authFetch(decisionsUrl).then(r => r.json()),
       canAudit ? authFetch(`/audit?brand=${b.id}&limit=50`).then(r => r.json()).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
       authFetch(`/feedback?brand=${b.id}`).then(r => r.json()).catch(() => ({ items: {} })),
       authFetch(`/alerts/cross-store?brand=${b.id}`).then(r => r.json()).catch(() => ({ items: [] })),
@@ -696,12 +722,24 @@ function App() {
       setError('No se pudo conectar con la API.')
       setLoading(false)
     })
-  }, [authFetch, canAudit])
+  }, [authFetch, canAudit, grain])
 
   const handleEnter = useCallback(() => {
     setView('dashboard')
     loadBrand(visibleBrands[0] || BRANDS[0])
   }, [loadBrand, visibleBrands])
+
+  // Sub-toggle between channel/store grain. Only allowed for brands that
+  // publish channel-grain CSVs (CHANNEL_GRAIN_BRANDS); for others we ignore.
+  // Switching to channel forces viewMode='list' because the sidebar views
+  // (Tiendas/Marcas) and analytics tabs are per-store-grain constructs.
+  const toggleGrain = useCallback((newGrain) => {
+    if (!CHANNEL_GRAIN_BRANDS.has(brand?.id) && newGrain === 'channel') return
+    if (newGrain === grain) return
+    if (newGrain === 'channel') setViewMode('list')
+    setGrain(newGrain)
+    loadBrand(brand, newGrain)
+  }, [brand, grain, loadBrand])
 
   // ── Filters ──
 
@@ -819,15 +857,18 @@ function App() {
       authFetch('/decisions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brand: brand.id, week, key, status }),
+        body: JSON.stringify({ brand: brand.id, week, key, status, grain }),
       }).then(r => { if (!r.ok) showToast('Error guardando decision', 'error') })
         .catch(() => showToast('Error de conexion', 'error'))
     }
-  }, [brand, week, authFetch])
+  }, [brand, week, authFetch, grain])
 
-  // Manual price confirm: store "manual" status locally, send manual_price + impact to API
+  // Manual price confirm: store "manual" status locally, send manual_price + impact to API.
+  // At channel grain the key is {parent_sku}-{bm|ecomm} (set by the caller).
   const handleManualConfirm = useCallback((action, snappedPrice, impact) => {
-    const key = `${action.parent_sku}-${action.store}`
+    const key = grain === 'channel'
+      ? `${action.parent_sku}-${action.channel}`
+      : `${action.parent_sku}-${action.store}`
     setDecisions(prev => ({ ...prev, [key]: 'manual' }))
     setManualAction(null)
     if (week) {
@@ -839,11 +880,12 @@ function App() {
           status: 'manual',
           manual_price: snappedPrice,
           estimated_impact: impact,
+          grain,
         }),
       }).then(r => { if (!r.ok) showToast('Error guardando precio manual', 'error') })
         .catch(() => showToast('Error de conexion', 'error'))
     }
-  }, [brand, week, authFetch])
+  }, [brand, week, authFetch, grain])
 
   // Chain-wide approve: apply to all/ecomm/bm stores for a parent SKU
   const handleChainApply = useCallback((chainKey, scope) => {
@@ -874,7 +916,10 @@ function App() {
   }, [actions, brand, week, authFetch])
 
   const bulkDecide = useCallback((items, status) => {
-    const keys = items.map(a => `${a.parent_sku}-${a.store}`)
+    const keyFor = grain === 'channel'
+      ? (a => `${a.parent_sku}-${a.channel}`)
+      : (a => `${a.parent_sku}-${a.store}`)
+    const keys = items.map(keyFor)
     setDecisions(prev => {
       const next = { ...prev }
       keys.forEach(k => { if (!next[k]) next[k] = status })
@@ -884,11 +929,11 @@ function App() {
       authFetch('/decisions/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brand: brand.id, week, keys, status }),
+        body: JSON.stringify({ brand: brand.id, week, keys, status, grain }),
       }).then(r => { if (!r.ok) showToast('Error guardando decisiones', 'error') })
         .catch(() => showToast('Error de conexion', 'error'))
     }
-  }, [brand, week, authFetch])
+  }, [brand, week, authFetch, grain])
 
   // Sidebar: approve all pending for a store/vendor (uses full actions, not filtered)
   const handleSidebarApprove = useCallback((groupName, groupField) => {
@@ -925,7 +970,11 @@ function App() {
   }, [])
 
   const reviewedCount = Object.keys(decisions).length
-  const approvedItems = actions.filter(a => decisions[`${a.parent_sku}-${a.store}`] === 'approved')
+  // Action → decision key. At channel grain the row has no `store`, only `channel`.
+  const actionKey = useCallback((a) => (
+    grain === 'channel' ? `${a.parent_sku}-${a.channel}` : `${a.parent_sku}-${a.store}`
+  ), [grain])
+  const approvedItems = actions.filter(a => decisions[actionKey(a)] === 'approved')
   const approvedImpact = approvedItems.reduce((s, a) => s + (Number(a.rev_delta) || 0), 0)
 
   // ── Export ──
@@ -1004,16 +1053,38 @@ function App() {
               </button>
             ))}
           </nav>
-          {canPlan && (
-            <button className={`brand-tab brand-tab--planner ${showPlannerQueue ? 'brand-tab--active' : ''}`}
-                    onClick={() => setShowPlannerQueue(!showPlannerQueue)}>
-              Cola Planner
-            </button>
+          {week && (
+            <span className="header-freshness" title="Semana de datos">
+              Sem. {week}
+              {undecidedCount > 0 && (
+                <span className="header-freshness__pending"> · {undecidedCount} sin revisar</span>
+              )}
+            </span>
           )}
         </div>
         <div className="header-meta">
+          <div className="header-utils">
+            <button
+              className={`util-btn ${showAnalytics ? 'util-btn--active' : ''}`}
+              onClick={() => setShowAnalytics(!showAnalytics)}
+              title="Salud del modelo (classifier, elasticidad, ciclo de vida)"
+            >
+              <BarChart2 size={13} /> Salud del modelo
+            </button>
+            <button className="util-btn" onClick={() => setShowSimulator(true)} title="Simulador de promociones">
+              <TrendingUp size={13} /> Simulador
+            </button>
+            {canPlan && (
+              <button
+                className={`util-btn ${showPlannerQueue ? 'util-btn--active' : ''}`}
+                onClick={() => setShowPlannerQueue(!showPlannerQueue)}
+                title="Cola de aprobacion para planner"
+              >
+                Cola Planner
+              </button>
+            )}
+          </div>
           {info && <span className="meta-tag">v{info.version} AUC {info.classifier?.avg_auc?.toFixed(3)}</span>}
-          <span className="meta-tag">{actions.length} acciones</span>
           {user && (
             <div className="header-user">
               {user.picture && <img src={user.picture} className="user-avatar" alt="" referrerPolicy="no-referrer" />}
@@ -1031,14 +1102,10 @@ function App() {
       </header>
 
       {week && showPlannerQueue && (
-        <PlannerQueue brand={brand?.id} authFetch={authFetch} showToast={showToast} />
+        <PlannerQueue brand={brand?.id} grain={grain} authFetch={authFetch} showToast={showToast} />
       )}
 
       {week && !showPlannerQueue && (<>
-        <div className="freshness-banner">
-          Datos: Semana del {week}
-          {undecidedCount > 0 && <span className="freshness-pending"> — {undecidedCount} acciones sin revisar</span>}
-        </div>
 
       <div className="stats-row">
         <div className="kpi">
@@ -1085,24 +1152,63 @@ function App() {
         })()}
       </div>
 
-      <div className="view-toggle">
-        <button className={`vt-btn ${viewMode === 'list' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('list')}>Lista</button>
-        <button className={`vt-btn ${viewMode === 'tiendas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('tiendas')}>
-          <Store size={13} /> Tiendas
-        </button>
-        <button className={`vt-btn ${viewMode === 'marcas' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('marcas')}>
-          <Tag size={13} /> {useVendorGrouping ? 'Marcas' : 'Categorias'}
-        </button>
-        <button className={`vt-btn ${viewMode === 'performance' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('performance')}>
-          <Target size={13} /> Rendimiento
-        </button>
-        <button className={`vt-btn ${viewMode === 'producto' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('producto')}>
-          <BarChart2 size={13} /> Producto
-        </button>
-        <button className={`vt-btn ${viewMode === 'competencia' ? 'vt-btn--active' : ''}`} onClick={() => switchViewMode('competencia')}>
-          <DollarSign size={13} /> Competencia
-        </button>
-      </div>
+      {/*
+        3-section IA: Acciones (primary list — the daily work) / Rendimiento
+        (model health + outcomes) / Competencia (market position). The previous
+        Lista/Tiendas/Marcas/Producto all fed the Acciones stream with different
+        groupings — they move to a quieter sub-row below.
+      */}
+      {(() => {
+        const isAcciones = ['list', 'tiendas', 'marcas', 'producto'].includes(viewMode)
+        const isRend = viewMode === 'performance'
+        const isComp = viewMode === 'competencia'
+        return (
+          <>
+            <div className="section-tabs">
+              <button
+                className={`section-tab ${isAcciones ? 'section-tab--active' : ''}`}
+                onClick={() => switchViewMode('list')}
+              >
+                Acciones
+                {actions.length > 0 && <span className="section-tab__badge">{actions.length}</span>}
+              </button>
+              <button
+                className={`section-tab ${isRend ? 'section-tab--active' : ''}`}
+                onClick={() => switchViewMode('performance')}
+              >
+                Rendimiento
+              </button>
+              <button
+                className={`section-tab ${isComp ? 'section-tab--active' : ''}`}
+                onClick={() => switchViewMode('competencia')}
+              >
+                Competencia
+              </button>
+            </div>
+
+            {/* Sub-grouping row — only shows inside Acciones, only at store grain */}
+            {isAcciones && grain !== 'channel' && (
+              <div className="sub-grouping">
+                <span className="sub-grouping__label">Agrupar:</span>
+                <div className="sub-grouping__tabs">
+                  <button className={`sub-tab ${viewMode === 'list' ? 'sub-tab--active' : ''}`} onClick={() => switchViewMode('list')}>
+                    Lista
+                  </button>
+                  <button className={`sub-tab ${viewMode === 'tiendas' ? 'sub-tab--active' : ''}`} onClick={() => switchViewMode('tiendas')}>
+                    <Store size={12} /> Por tienda
+                  </button>
+                  <button className={`sub-tab ${viewMode === 'marcas' ? 'sub-tab--active' : ''}`} onClick={() => switchViewMode('marcas')}>
+                    <Tag size={12} /> Por {useVendorGrouping ? 'marca' : 'categoria'}
+                  </button>
+                  <button className={`sub-tab ${viewMode === 'producto' ? 'sub-tab--active' : ''}`} onClick={() => switchViewMode('producto')}>
+                    <BarChart2 size={12} /> Por producto
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )
+      })()}
 
       <div className={`dashboard-body ${(viewMode === 'tiendas' || viewMode === 'marcas') ? 'dashboard-body--sidebar' : ''}`}>
       {viewMode === 'tiendas' && (
@@ -1120,50 +1226,147 @@ function App() {
       {viewMode === 'producto' ? (() => {
         // Group actions by parent_sku, split into B&M and Ecom channels
         const isEcomm = (store) => String(store).toUpperCase().startsWith('AB')
+        const q = search.toLowerCase()
         const grouped = {}
+        // Apply all filters at action level before grouping
         const filteredActions = actions.filter(a => {
-          if (search && !a.product?.toLowerCase().includes(search.toLowerCase()) && !a.parent_sku?.toLowerCase().includes(search.toLowerCase())) return false
+          if (q && !(
+            (a.parent_sku || '').toLowerCase().includes(q) ||
+            (a.product || '').toLowerCase().includes(q) ||
+            (a.sku || '').toLowerCase().includes(q)
+          )) return false
+          if (filterUrgency !== 'all') {
+            if (filterUrgency === 'INCREASE' && a.action_type !== 'increase') return false
+            if (filterUrgency !== 'INCREASE' && (a.urgency !== filterUrgency || a.action_type === 'increase')) return false
+          }
+          if (filterCategory !== 'all' && a.subcategory !== filterCategory) return false
+          if (filterStatus !== 'all') {
+            const status = decisions[`${a.parent_sku}-${a.store}`] || 'pending'
+            if (filterStatus !== status) return false
+          }
           return true
         })
         filteredActions.forEach(a => {
           const sku = a.parent_sku
-          if (!grouped[sku]) grouped[sku] = { sku, product: a.product, category: a.category, subcategory: a.subcategory, vendor_brand: a.vendor_brand, bm: [], ecom: [] }
+          if (!grouped[sku]) grouped[sku] = { sku, product: a.product, category: a.category, subcategory: a.subcategory, vendor_brand: a.vendor_brand, age: 0, bm: [], ecom: [] }
+          grouped[sku].age = Math.max(grouped[sku].age, Number(a.product_age_weeks) || 0)
           const channel = isEcomm(a.store) ? 'ecom' : 'bm'
           grouped[sku][channel].push(a)
         })
-        const skuList = Object.values(grouped)
+        let skuList = Object.values(grouped)
           .filter(g => g.bm.length > 0 || g.ecom.length > 0)
-          .sort((a, b) => {
-            // Sort by vendor brand first, then subcategory (sneakers first), then rev delta
-            const aBrand = (a.vendor_brand || 'ZZZ').toLowerCase()
-            const bBrand = (b.vendor_brand || 'ZZZ').toLowerCase()
-            if (aBrand !== bBrand) return aBrand.localeCompare(bBrand)
-            // Sneakers/Running/Zapatillas first
-            const catPriority = (cat) => {
-              const c = (cat || '').toLowerCase()
-              if (c.includes('sneaker') || c.includes('running') || c.includes('zapatilla') || c.includes('footwear')) return 0
-              if (c.includes('outdoor') || c.includes('trail')) return 1
-              return 2
-            }
-            const aCat = catPriority(a.subcategory || a.category)
-            const bCat = catPriority(b.subcategory || b.category)
-            if (aCat !== bCat) return aCat - bCat
+
+        // Apply product-level filters (age, vendor)
+        if (filterVendor) {
+          skuList = skuList.filter(g => (g.vendor_brand || 'Other') === filterVendor)
+        }
+        const prodFilterAge = filterStore  // reuse filterStore state for age filter in producto mode
+        if (prodFilterAge !== 'all') {
+          const [lo, hi] = prodFilterAge.split('-').map(Number)
+          skuList = skuList.filter(g => g.age >= lo && (hi ? g.age <= hi : true))
+        }
+
+        skuList.sort((a, b) => {
+          if (sortBy === 'revenue') {
             const aRev = [...a.bm, ...a.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
             const bRev = [...b.bm, ...b.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
-            return bRev - aRev
-          })
+            return Math.abs(bRev) - Math.abs(aRev)
+          }
+          if (sortBy === 'age') return (b.age || 0) - (a.age || 0)
+          // Default: vendor brand → subcategory → rev delta
+          const aBrand = (a.vendor_brand || 'ZZZ').toLowerCase()
+          const bBrand = (b.vendor_brand || 'ZZZ').toLowerCase()
+          if (aBrand !== bBrand) return aBrand.localeCompare(bBrand)
+          const catPriority = (cat) => {
+            const c = (cat || '').toLowerCase()
+            if (c.includes('sneaker') || c.includes('running') || c.includes('zapatilla') || c.includes('footwear')) return 0
+            if (c.includes('outdoor') || c.includes('trail')) return 1
+            return 2
+          }
+          const aCat = catPriority(a.subcategory || a.category)
+          const bCat = catPriority(b.subcategory || b.category)
+          if (aCat !== bCat) return aCat - bCat
+          const aRev = [...a.bm, ...a.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
+          const bRev = [...b.bm, ...b.ecom].reduce((s, x) => s + (Number(x.rev_delta) || 0), 0)
+          return bRev - aRev
+        })
+
+        // Product-level vendor brands for filter dropdown
+        const prodVendors = [...new Set(Object.values(grouped).map(g => g.vendor_brand || 'Other'))].sort()
+
+        // Pagination
+        const PROD_PAGE = 50
+        const prodTotal = Math.max(1, Math.ceil(skuList.length / PROD_PAGE))
+        const prodPage = Math.min(page, prodTotal)
+        const pagedSkus = skuList.slice((prodPage - 1) * PROD_PAGE, prodPage * PROD_PAGE)
 
         const median = arr => { const s = arr.slice().sort((a,b) => a-b); return s[Math.floor(s.length/2)] || 0 }
         const clp = n => n ? '$' + Math.round(n).toLocaleString('es-CL') : '—'
 
         return (
           <div className="prod-page">
-            <div className="comp-search">
-              <Search size={15} />
-              <input type="text" placeholder="Buscar SKU o producto..." value={search} onChange={e => setSearch(e.target.value)} />
+            <div className="toolbar">
+              <div className="search-box">
+                <Search size={15} />
+                <input type="text" placeholder="Buscar SKU o producto..." value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} />
+              </div>
+              <div className="filter-group">
+                <Filter size={14} />
+                <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1) }}>
+                  <option value="all">Todo estado</option>
+                  <option value="pending">Sin revisar</option>
+                  <option value="approved">Aprobadas</option>
+                  <option value="rejected">Rechazadas</option>
+                  <option value="manual">Precio manual</option>
+                </select>
+                <select value={filterUrgency} onChange={e => { setFilterUrgency(e.target.value); setPage(1) }}>
+                  <option value="all">Toda urgencia</option>
+                  <option value="INCREASE">Subir precio</option>
+                  <option value="HIGH">Alta</option>
+                  <option value="MEDIUM">Media</option>
+                  <option value="LOW">Baja</option>
+                </select>
+                {prodVendors.length > 1 && (
+                  <select value={filterVendor || ''} onChange={e => { setFilterVendor(e.target.value || null); setPage(1) }}>
+                    <option value="">Toda marca</option>
+                    {prodVendors.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                )}
+                {categories.length > 1 && (
+                  <select value={filterCategory} onChange={e => { setFilterCategory(e.target.value); setPage(1) }}>
+                    <option value="all">Toda categoria</option>
+                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                )}
+                <select value={prodFilterAge} onChange={e => { setFilterStore(e.target.value); setPage(1) }}>
+                  <option value="all">Toda antiguedad</option>
+                  <option value="0-4">0-4 semanas (nuevo)</option>
+                  <option value="5-12">5-12 semanas</option>
+                  <option value="13-26">13-26 semanas</option>
+                  <option value="27-52">27-52 semanas</option>
+                  <option value="53-Infinity">53+ semanas</option>
+                </select>
+                <select value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(1) }}>
+                  <option value="urgency">Ordenar: Marca</option>
+                  <option value="revenue">Ordenar: Impacto</option>
+                  <option value="age">Ordenar: Antiguedad</option>
+                </select>
+              </div>
+              <div className="toolbar-actions">
+                <span className="result-count">{skuList.length} productos</span>
+              </div>
             </div>
+
+            {prodTotal > 1 && (
+              <div className="pagination">
+                <button disabled={prodPage <= 1} onClick={() => setPage(p => p - 1)}>&laquo; Anterior</button>
+                <span className="page-info">Pagina {prodPage} de {prodTotal} ({skuList.length} productos)</span>
+                <button disabled={prodPage >= prodTotal} onClick={() => setPage(p => p + 1)}>Siguiente &raquo;</button>
+              </div>
+            )}
+
             <div className="prod-list">
-              {skuList.slice(0, 50).map(g => {
+              {pagedSkus.map(g => {
                 const bmPrices = g.bm.map(a => a.current_price).filter(Boolean)
                 const bmRec = g.bm.map(a => a.recommended_price).filter(Boolean)
                 const bmVel = g.bm.reduce((s, a) => s + (Number(a.current_velocity) || 0), 0)
@@ -1182,6 +1385,7 @@ function App() {
                       <span className="prod-name">{g.product}</span>
                       <span className="sku-code">{g.sku}</span>
                       {g.vendor_brand && <span className="prod-vendor">{g.vendor_brand}</span>}
+                      {g.age > 0 && <span className="prod-age"><Clock size={10} /> {g.age}sem</span>}
                     </div>
                     <div className="prod-channels">
                       {g.bm.length > 0 && (
@@ -1227,7 +1431,16 @@ function App() {
                 )
               })}
             </div>
-            {skuList.length > 50 && <div className="empty-state">Mostrando 50 de {skuList.length} productos. Usa el buscador para filtrar.</div>}
+
+            {skuList.length === 0 && <div className="empty-state">No hay productos con estos filtros</div>}
+
+            {prodTotal > 1 && (
+              <div className="pagination">
+                <button disabled={prodPage <= 1} onClick={() => { setPage(p => p - 1); window.scrollTo(0, 0) }}>&laquo; Anterior</button>
+                <span className="page-info">Pagina {prodPage} de {prodTotal}</span>
+                <button disabled={prodPage >= prodTotal} onClick={() => { setPage(p => p + 1); window.scrollTo(0, 0) }}>Siguiente &raquo;</button>
+              </div>
+            )}
           </div>
         )
       })() : viewMode === 'competencia' ? (
@@ -1470,6 +1683,49 @@ function App() {
       ) : (
       <>
 
+      {CHANNEL_GRAIN_BRANDS.has(brand?.id) && (
+        <div className="grain-bar">
+          <span className="grain-bar__label">Grano</span>
+          <div className="grain-bar__tabs">
+            <button
+              className={`grain-tab ${grain === 'channel' ? 'grain-tab--active' : ''}`}
+              onClick={() => toggleGrain('channel')}
+              title="Una accion por parent SKU x canal (B&M / Ecomm)"
+            >
+              Canal
+            </button>
+            <button
+              className={`grain-tab ${grain === 'store' ? 'grain-tab--active' : ''}`}
+              onClick={() => toggleGrain('store')}
+              title="Una accion por parent SKU x tienda"
+            >
+              Por tienda
+            </button>
+          </div>
+          {grain === 'channel' && (
+            <span className="grain-bar__hint">
+              Vista nueva. Las excepciones por tienda aparecen abajo en <strong>inconsistencias</strong>.
+            </span>
+          )}
+        </div>
+      )}
+
+      {grain === 'channel' ? (
+        <ChannelListaView
+          actions={actions}
+          decisions={decisions}
+          week={week}
+          brandId={brand?.id}
+          canApprove={canApprove}
+          canExport={canExport}
+          onDecide={setDecision}
+          onBulkDecide={bulkDecide}
+          onExport={() => setShowExportConfirm(true)}
+          approvedCount={approvedItems.length}
+          onSwitchToStoreGrain={() => toggleGrain('store')}
+        />
+      ) : (<>
+
       <div className="toolbar">
         <div className="search-box">
           <Search size={15} />
@@ -1508,11 +1764,6 @@ function App() {
             <option value="store">Ordenar: Tienda</option>
           </select>
         </div>
-        <button className={`btn-analytics ${showAnalytics ? 'btn-analytics--active' : ''}`}
-                onClick={() => setShowAnalytics(!showAnalytics)}
-                title="Panel de analytics">
-          <BarChart2 size={15} /> Analisis
-        </button>
         <div className="toolbar-actions">
           <span className="result-count">{filtered.length} resultados</span>
           {canApprove && (() => {
@@ -1581,6 +1832,8 @@ function App() {
           <button disabled={page >= totalPages} onClick={() => { setPage(p => p + 1); window.scrollTo(0, 0) }}>Siguiente &raquo;</button>
         </div>
       )}
+
+      </>)}{/* end grain === 'channel' ? ChannelListaView : <per-store lista> */}
 
       {alerts.length > 0 && (
         <section className="section section--alerts">
@@ -1669,6 +1922,14 @@ function App() {
           authFetch={authFetch}
           onConfirm={(price, impact) => handleManualConfirm(manualAction, price, impact)}
           onClose={() => setManualAction(null)}
+        />
+      )}
+
+      {showSimulator && (
+        <SimulatorModal
+          brand={brand?.id}
+          authFetch={authFetch}
+          onClose={() => setShowSimulator(false)}
         />
       )}
 

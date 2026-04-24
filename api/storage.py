@@ -81,6 +81,8 @@ def _load_pricing_actions_impl(brand: str) -> dict:
                 df[col] = df[col].fillna("")
         return df
 
+    empty = {"items": [], "week": None, "total": 0, "grain": "store"}
+
     # Try GCS first
     if _use_gcs():
         try:
@@ -93,7 +95,7 @@ def _load_pricing_actions_impl(brand: str) -> dict:
                 df = _normalize_nans(pd.read_csv(io.StringIO(content)))
                 df = _ensure_vendor_brand(df, brand)
                 week = blobs[-1].name.split("pricing_actions_")[1].replace(".csv", "")
-                return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
+                return {"week": week, "total": len(df), "items": df.to_dict(orient="records"), "grain": "store"}
         except Exception:
             pass  # fall through to local
 
@@ -102,13 +104,115 @@ def _load_pricing_actions_impl(brand: str) -> dict:
     try:
         files = sorted(actions_dir.glob("pricing_actions_*.csv"))
         if not files:
-            return {"items": [], "week": None, "total": 0}
+            return empty
         df = _normalize_nans(pd.read_csv(files[-1]))
         df = _ensure_vendor_brand(df, brand)
         week = files[-1].stem.replace("pricing_actions_", "")
-        return {"week": week, "total": len(df), "items": df.to_dict(orient="records")}
+        return {"week": week, "total": len(df), "items": df.to_dict(orient="records"), "grain": "store"}
     except Exception:
-        return {"items": [], "week": None, "total": 0}
+        return empty
+
+
+# ── Channel-grain pricing actions (read-only, written by channel_aggregate) ──
+
+def load_pricing_actions_channel(brand: str) -> dict:
+    """Load latest channel-grain pricing actions CSV. Returns {week, total, items, grain}.
+
+    Mirror of load_pricing_actions but reads from weekly_actions_channel/{brand}/
+    produced by src/models/channel_pricing_brand.py. Returns empty if the channel
+    step hasn't run yet for this brand (e.g., brand not in CHANNEL_GRAIN_BRANDS).
+    """
+    return _cached(f"actions_channel:{brand}", lambda: _load_pricing_actions_channel_impl(brand))
+
+
+def _load_pricing_actions_channel_impl(brand: str) -> dict:
+    import pandas as pd
+
+    def _ensure_vendor_brand(df, brand):
+        if "vendor_brand" not in df.columns and "parent_sku" in df.columns:
+            from config.vendor_brands import get_vendor_brand
+            df["vendor_brand"] = df["parent_sku"].apply(lambda s: get_vendor_brand(s, brand))
+        return df
+
+    def _normalize_nans(df):
+        for col in df.columns:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                df[col] = df[col].astype(object).where(df[col].notna(), None)
+            else:
+                df[col] = df[col].fillna("")
+        return df
+
+    empty = {"items": [], "week": None, "total": 0, "grain": "channel"}
+
+    # Try GCS first
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            prefix = f"weekly_actions_channel/{brand.lower()}/pricing_actions_channel_"
+            blobs = sorted([b for b in bucket.list_blobs(prefix=prefix)], key=lambda b: b.name)
+            if blobs:
+                import io
+                content = blobs[-1].download_as_text()
+                df = _normalize_nans(pd.read_csv(io.StringIO(content)))
+                df = _ensure_vendor_brand(df, brand)
+                week = blobs[-1].name.split("pricing_actions_channel_")[1].replace(".csv", "")
+                return {
+                    "week": week,
+                    "total": len(df),
+                    "items": df.to_dict(orient="records"),
+                    "grain": "channel",
+                }
+        except Exception:
+            pass
+
+    # Local fallback
+    actions_dir = _BASE_DIR / "weekly_actions_channel" / brand.lower()
+    try:
+        files = sorted(actions_dir.glob("pricing_actions_channel_*.csv"))
+        if not files:
+            return empty
+        df = _normalize_nans(pd.read_csv(files[-1]))
+        df = _ensure_vendor_brand(df, brand)
+        week = files[-1].stem.replace("pricing_actions_channel_", "")
+        return {
+            "week": week,
+            "total": len(df),
+            "items": df.to_dict(orient="records"),
+            "grain": "channel",
+        }
+    except Exception:
+        return empty
+
+
+def load_channel_aggregation_stats(brand: str) -> dict:
+    """Load the channel_aggregation_stats_{week}.json summary — used by the
+    dashboard to surface gap_pct and mandatory-review counts."""
+    return _cached(
+        f"channel_stats:{brand}",
+        lambda: _load_channel_stats_impl(brand),
+        ttl=600,
+    )
+
+
+def _load_channel_stats_impl(brand: str) -> dict:
+    if _use_gcs():
+        try:
+            bucket = _get_bucket()
+            prefix = f"weekly_actions_channel/{brand.lower()}/channel_aggregation_stats_"
+            blobs = sorted([b for b in bucket.list_blobs(prefix=prefix)], key=lambda b: b.name)
+            if blobs:
+                return json.loads(blobs[-1].download_as_text())
+        except Exception:
+            pass
+
+    stats_dir = _BASE_DIR / "weekly_actions_channel" / brand.lower()
+    try:
+        files = sorted(stats_dir.glob("channel_aggregation_stats_*.json"))
+        if not files:
+            return {"available": False}
+        return json.loads(files[-1].read_text())
+    except Exception:
+        return {"available": False}
 
 
 # ── Alerts (read-only, written by pipeline) ───────────────────────────────────
@@ -637,6 +741,73 @@ def _local_save_decisions(data):
     base = _BASE_DIR / "decisions" / data["brand"]
     base.mkdir(parents=True, exist_ok=True)
     with open(base / f"decisions_{data['week']}.json", "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+# ── Channel-grain decisions (separate namespace) ──────────────────────────────
+# Kept in a distinct file (decisions_channel_{week}.json) so chain-level and
+# per-store decisions can coexist without precedence bugs. Per-store overrides
+# continue to live in the existing decisions_{week}.json file.
+
+def load_decisions_channel(brand: str, week: str = None) -> dict:
+    if _use_gcs():
+        return _gcs_load_decisions_channel(brand, week)
+    return _local_load_decisions_channel(brand, week)
+
+
+def save_decisions_channel(data: dict):
+    data["updated_at"] = datetime.now().isoformat()
+    data["grain"] = "channel"
+    if _use_gcs():
+        _gcs_save_decisions_channel(data)
+    else:
+        _local_save_decisions_channel(data)
+
+
+def _gcs_load_decisions_channel(brand, week):
+    bucket = _get_bucket()
+    prefix = f"decisions/{brand.lower()}/decisions_channel_"
+    if week:
+        blob = bucket.blob(f"{prefix}{week}.json")
+        if blob.exists():
+            return json.loads(blob.download_as_text())
+        return {"week": week, "brand": brand.lower(), "grain": "channel", "decisions": {}}
+    blobs = sorted([b for b in bucket.list_blobs(prefix=prefix)], key=lambda b: b.name)
+    if not blobs:
+        return {"week": None, "brand": brand.lower(), "grain": "channel", "decisions": {}}
+    return json.loads(blobs[-1].download_as_text())
+
+
+def _gcs_save_decisions_channel(data):
+    bucket = _get_bucket()
+    blob = bucket.blob(f"decisions/{data['brand']}/decisions_channel_{data['week']}.json")
+    blob.upload_from_string(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        content_type="application/json",
+    )
+
+
+def _local_load_decisions_channel(brand, week):
+    base = _BASE_DIR / "decisions" / brand.lower()
+    if not base.exists():
+        return {"week": week, "brand": brand.lower(), "grain": "channel", "decisions": {}}
+    if week:
+        fp = base / f"decisions_channel_{week}.json"
+        if fp.exists():
+            with open(fp) as f:
+                return json.load(f)
+        return {"week": week, "brand": brand.lower(), "grain": "channel", "decisions": {}}
+    files = sorted(base.glob("decisions_channel_*.json"))
+    if not files:
+        return {"week": None, "brand": brand.lower(), "grain": "channel", "decisions": {}}
+    with open(files[-1]) as f:
+        return json.load(f)
+
+
+def _local_save_decisions_channel(data):
+    base = _BASE_DIR / "decisions" / data["brand"]
+    base.mkdir(parents=True, exist_ok=True)
+    with open(base / f"decisions_channel_{data['week']}.json", "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 

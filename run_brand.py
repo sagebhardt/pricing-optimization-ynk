@@ -26,11 +26,13 @@ from src.features.build_enhanced_brand import build_enhanced_for_brand
 from src.features.aggregate_parent import aggregate_to_parent
 from src.models.train_brand import train_brand_models
 from src.models.weekly_pricing_brand import generate_weekly_actions_for_brand
+from src.models.channel_pricing_brand import generate_channel_actions_for_brand
 from src.features.outcome_brand import compute_outcomes_for_brand
 from src.features.cross_store_alerts_brand import run_cross_store_alerts_for_brand
 from src.scraping.scrape_brand import scrape_competitors_for_brand
+from src.strategy.competitive_intel import generate_competitive_brief
 
-ALL_STEPS = ["extract", "scrape_competitors", "elasticity", "features", "lifecycle", "size_curve", "enhance", "aggregate", "cross_store", "train", "pricing", "outcome", "sync"]
+ALL_STEPS = ["extract", "scrape_competitors", "elasticity", "features", "lifecycle", "size_curve", "enhance", "aggregate", "cross_store", "train", "pricing", "channel_aggregate", "competitive_intel", "outcome", "sync"]
 
 PROJECT_ROOT = Path(__file__).parent
 
@@ -65,17 +67,47 @@ def sync_to_gcs(brand: str):
         latest = csvs[-1]
         _upload(latest, f"weekly_actions/{brand_lower}/{latest.name}")
 
+    # 1a. Channel-level pricing actions (only when channel_aggregate ran)
+    channel_dir = PROJECT_ROOT / "weekly_actions_channel" / brand_lower
+    if channel_dir.exists():
+        channel_csvs = sorted(channel_dir.glob("pricing_actions_channel_*.csv"))
+        if channel_csvs:
+            latest_ch = channel_csvs[-1]
+            _upload(latest_ch, f"weekly_actions_channel/{brand_lower}/{latest_ch.name}")
+        stats_files = sorted(channel_dir.glob("channel_aggregation_stats_*.json"))
+        if stats_files:
+            latest_stats = stats_files[-1]
+            _upload(latest_stats, f"weekly_actions_channel/{brand_lower}/{latest_stats.name}")
+
+    # 1b. Products catalog (for standalone scraping job)
+    products_path = PROJECT_ROOT / "data" / "raw" / brand_lower / "products.parquet"
+    if products_path.exists():
+        _upload(products_path, f"data/raw/{brand_lower}/products.parquet")
+
     # 2. Size curve alerts
     alerts_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "size_curve_alerts.parquet"
     if alerts_path.exists():
         _upload(alerts_path, f"alerts/{brand_lower}/size_curve_alerts.parquet")
 
-    # 2b. Competitor prices
+    # 2b. Competitor prices (latest + historical snapshot)
     comp_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "competitor_prices.parquet"
     if comp_path.exists():
         _upload(comp_path, f"competitors/{brand_lower}/competitor_prices.parquet")
+        # Historical snapshot for trend analysis
+        comp_history_dir = PROJECT_ROOT / "data" / "processed" / brand_lower / "competitor_history"
+        if comp_history_dir.exists():
+            for hp in sorted(comp_history_dir.glob("competitor_prices_*.parquet")):
+                _upload(hp, f"competitors/{brand_lower}/history/{hp.name}")
 
-    # 2c. Cross-store consistency alerts
+    # 2c. Competitive intelligence brief
+    brief_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "competitive_brief.json"
+    if brief_path.exists():
+        _upload(brief_path, f"competitors/{brand_lower}/intelligence/competitive_brief.json")
+    trend_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "competitor_trend_features.parquet"
+    if trend_path.exists():
+        _upload(trend_path, f"competitors/{brand_lower}/intelligence/competitor_trend_features.parquet")
+
+    # 2d. Cross-store consistency alerts
     cross_store_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "cross_store_alerts.parquet"
     if cross_store_path.exists():
         _upload(cross_store_path, f"alerts/{brand_lower}/cross_store_alerts.parquet")
@@ -127,6 +159,7 @@ def main():
     step_fns = {
         "extract": lambda: extract_brand(brand),
         "scrape_competitors": lambda: scrape_competitors_for_brand(brand),
+        "competitive_intel": lambda: generate_competitive_brief(brand),
         "features": lambda: build_features_for_brand(brand),
         "elasticity": lambda: run_elasticity_for_brand(brand),
         "lifecycle": lambda: build_lifecycle_for_brand(brand),
@@ -136,6 +169,7 @@ def main():
         "cross_store": lambda: run_cross_store_alerts_for_brand(brand),
         "train": lambda: train_brand_models(brand),
         "pricing": lambda: generate_weekly_actions_for_brand(brand, target_week=args.week),
+        "channel_aggregate": lambda: generate_channel_actions_for_brand(brand, target_week=args.week),
         "outcome": lambda: compute_outcomes_for_brand(brand),
         "sync": lambda: sync_to_gcs(brand),
     }

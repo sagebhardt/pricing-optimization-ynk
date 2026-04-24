@@ -57,7 +57,7 @@ async def auth_middleware(request: Request, call_next):
     # Non-API routes — serve SPA (frontend handles login)
     api_prefixes = ("/pricing", "/decisions", "/export", "/alerts", "/model",
                     "/recommendations", "/sku/", "/audit", "/auth/me", "/admin", "/feedback",
-                    "/analytics", "/estimate-impact")
+                    "/analytics", "/estimate-impact", "/strategy", "/simulate", "/channel-stats")
     if not any(path.startswith(p) for p in api_prefixes):
         return await call_next(request)
 
@@ -102,6 +102,10 @@ class DecisionPayload(BaseModel):
     manual_price: Optional[int] = None
     estimated_impact: Optional[dict] = None
     chain_scope: Optional[str] = None  # "all" | "ecomm" | "bm" — chain-wide decision
+    # "store" (default, legacy) or "channel". Channel-grain decisions use keys
+    # of the form "{parent_sku}-{bm|ecomm}" and go to decisions_channel_{week}.json;
+    # chain_scope is mutually exclusive with grain=channel (the row IS the channel).
+    grain: Optional[str] = "store"
 
 
 class BulkDecisionPayload(BaseModel):
@@ -109,13 +113,26 @@ class BulkDecisionPayload(BaseModel):
     week: str
     keys: list[str]
     status: str
+    grain: Optional[str] = "store"
 
 
 class ImpactEstimatePayload(BaseModel):
     brand: str
     parent_sku: str
-    store: str
+    store: Optional[str] = None  # required when grain=store
+    channel: Optional[str] = None  # required when grain=channel ("bm" or "ecomm")
     manual_price: int
+    grain: Optional[str] = "store"
+
+
+class SimulationPayload(BaseModel):
+    brand: str
+    discount_pct: float  # 0.0 - 0.50
+    duration_weeks: int = 1
+    filter_category: Optional[str] = None  # e.g. "Footwear", "Apparel"
+    filter_vendor: Optional[str] = None  # e.g. "Nike", "Adidas"
+    filter_skus: Optional[list[str]] = None  # specific parent SKUs
+    filter_stores: Optional[list[str]] = None  # specific stores
 
 
 class FeedbackPayload(BaseModel):
@@ -247,6 +264,201 @@ def get_competitor_analytics(brand: str, request: Request):
     user = _get_user(request)
     _check_brand_access(user, brand)
     return storage.load_competitor_analytics(brand)
+
+
+@app.get("/strategy/brief/{brand}")
+def get_competitive_brief(brand: str, request: Request):
+    """Full competitive intelligence brief: position map, movements, opportunities, threats."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+    return storage.load_competitive_brief(brand)
+
+
+@app.get("/strategy/opportunities/{brand}")
+def get_competitive_opportunities(brand: str, request: Request, limit: int = Query(20)):
+    """Actionable competitive opportunities ranked by estimated weekly margin impact."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+    brief = storage.load_competitive_brief(brand)
+    if not brief.get("available"):
+        return {"brand": brand, "available": False, "opportunities": []}
+    return {
+        "brand": brand,
+        "available": True,
+        "total_opportunity_value": brief.get("total_opportunity_value", 0),
+        "opportunities": brief.get("opportunities", [])[:limit],
+    }
+
+
+@app.get("/strategy/threats/{brand}")
+def get_competitive_threats(brand: str, request: Request):
+    """Competitive threats requiring response, ranked by severity."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+    brief = storage.load_competitive_brief(brand)
+    if not brief.get("available"):
+        return {"brand": brand, "available": False, "threats": []}
+    return {
+        "brand": brand,
+        "available": True,
+        "critical_count": brief.get("critical_threat_count", 0),
+        "total_risk_value": brief.get("total_risk_value", 0),
+        "threats": brief.get("threats", []),
+    }
+
+
+@app.get("/strategy/movements/{brand}")
+def get_price_movements(brand: str, request: Request):
+    """Recent competitor price movements (drops, raises, promo starts/ends)."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+    brief = storage.load_competitive_brief(brand)
+    if not brief.get("available"):
+        return {"brand": brand, "available": False, "movements": []}
+    return {
+        "brand": brand,
+        "available": True,
+        "period": brief.get("period", {}),
+        "movement_summary": brief.get("movement_summary", {}),
+        "movements": brief.get("movements", []),
+    }
+
+
+# ── Promotion Simulator ────────────────────────────────────────────────────
+
+@app.post("/simulate/promotion")
+def simulate_promotion_endpoint(payload: SimulationPayload, request: Request):
+    """Simulate a promotional scenario and return projected impact.
+
+    Filters pricing actions by category/vendor/SKUs/stores, then simulates
+    the given discount across all matching items using elasticity + margin math.
+    """
+    from api import storage
+    from api.simulator import simulate_promotion
+    user = _get_user(request)
+    _check_brand_access(user, payload.brand)
+
+    if payload.discount_pct < 0 or payload.discount_pct > 0.50:
+        raise HTTPException(400, "discount_pct must be between 0.0 and 0.50")
+
+    # Load actions + elasticity
+    actions_data = storage.load_pricing_actions(payload.brand)
+    items = actions_data.get("items", [])
+    if not items:
+        raise HTTPException(404, f"No pricing actions for {payload.brand}")
+
+    # Apply filters
+    if payload.filter_category:
+        cat = payload.filter_category.lower()
+        items = [i for i in items if cat in str(i.get("primera_jerarquia", "")).lower()
+                 or cat in str(i.get("segunda_jerarquia", "")).lower()]
+    if payload.filter_vendor:
+        vendor = payload.filter_vendor.lower()
+        items = [i for i in items if vendor in str(i.get("vendor_brand", "")).lower()]
+    if payload.filter_skus:
+        sku_set = set(payload.filter_skus)
+        items = [i for i in items if i.get("parent_sku") in sku_set]
+    if payload.filter_stores:
+        store_set = set(str(s) for s in payload.filter_stores)
+        items = [i for i in items if str(i.get("store")) in store_set]
+
+    if not items:
+        raise HTTPException(404, "No items match the filter criteria")
+
+    # Load elasticity (SKU-level from GCS/local)
+    elasticity_map = _load_elasticity_map(payload.brand)
+
+    # Load competitor prices for context
+    comp_summary = storage.load_competitor_summary(payload.brand)
+    comp_prices = {}
+    for ci in comp_summary.get("items", []):
+        prices = [c["price"] for c in ci.get("competitors", []) if c.get("price", 0) > 0]
+        if prices:
+            comp_prices[ci["parent_sku"]] = min(prices)
+
+    result = simulate_promotion(items, elasticity_map, payload.discount_pct, payload.duration_weeks, comp_prices)
+    result["brand"] = payload.brand
+    result["filter"] = {
+        "category": payload.filter_category,
+        "vendor": payload.filter_vendor,
+        "skus": len(payload.filter_skus) if payload.filter_skus else None,
+        "stores": payload.filter_stores,
+    }
+    return result
+
+
+@app.post("/simulate/optimal-discount")
+def simulate_optimal_discount(payload: SimulationPayload, request: Request):
+    """Find the discount level that maximizes weekly margin for the filtered items."""
+    from api import storage
+    from api.simulator import find_optimal_discount
+    user = _get_user(request)
+    _check_brand_access(user, payload.brand)
+
+    actions_data = storage.load_pricing_actions(payload.brand)
+    items = actions_data.get("items", [])
+    if not items:
+        raise HTTPException(404, f"No pricing actions for {payload.brand}")
+
+    # Apply same filters
+    if payload.filter_category:
+        cat = payload.filter_category.lower()
+        items = [i for i in items if cat in str(i.get("primera_jerarquia", "")).lower()
+                 or cat in str(i.get("segunda_jerarquia", "")).lower()]
+    if payload.filter_vendor:
+        vendor = payload.filter_vendor.lower()
+        items = [i for i in items if vendor in str(i.get("vendor_brand", "")).lower()]
+    if payload.filter_skus:
+        sku_set = set(payload.filter_skus)
+        items = [i for i in items if i.get("parent_sku") in sku_set]
+    if payload.filter_stores:
+        store_set = set(str(s) for s in payload.filter_stores)
+        items = [i for i in items if str(i.get("store")) in store_set]
+
+    if not items:
+        raise HTTPException(404, "No items match the filter criteria")
+
+    elasticity_map = _load_elasticity_map(payload.brand)
+    result = find_optimal_discount(items, elasticity_map, payload.duration_weeks)
+    result["brand"] = payload.brand
+    result["items_count"] = len(items)
+    return result
+
+
+def _load_elasticity_map(brand: str) -> dict:
+    """Load per-SKU elasticity as a dict. Cached via storage layer."""
+    from api import storage
+    import io
+    elasticity = {}
+
+    if storage._use_gcs():
+        try:
+            import pandas as pd
+            bucket = storage._get_bucket()
+            blob = bucket.blob(f"models/{brand.lower()}/elasticity_by_sku.parquet")
+            if blob.exists():
+                df = pd.read_parquet(io.BytesIO(blob.download_as_bytes()))
+                reliable = df[df["confidence"].isin(["high", "medium"])]
+                elasticity = reliable.set_index("codigo_padre")["elasticity"].to_dict()
+        except Exception:
+            pass
+
+    if not elasticity:
+        from pathlib import Path
+        import pandas as pd
+        fp = Path(__file__).parent.parent / "data" / "processed" / brand.lower() / "elasticity_by_sku.parquet"
+        try:
+            df = pd.read_parquet(fp)
+            reliable = df[df["confidence"].isin(["high", "medium"])]
+            elasticity = reliable.set_index("codigo_padre")["elasticity"].to_dict()
+        except FileNotFoundError:
+            pass
+
+    return elasticity
 
 
 @app.get("/model/info")
@@ -586,13 +798,61 @@ def get_outcome_details(brand: str, request: Request):
     }
 
 
-@app.get("/pricing-actions")
-def get_pricing_actions(brand: Optional[str] = Query(None)):
-    """Get the weekly pricing action list."""
+def _validate_grain(grain: str) -> str:
+    """Normalize and validate a grain value (raises 400 if invalid)."""
+    g = (grain or "store").lower()
+    if g not in ("store", "channel"):
+        raise HTTPException(400, f"Invalid grain '{grain}' — must be 'store' or 'channel'")
+    return g
+
+
+def _load_actions_by_grain(brand: str, grain: str) -> dict:
+    """Dispatch the right storage loader for the requested grain."""
     from api import storage
-    if not brand:
-        return {"items": [], "week": None, "total": 0}
+    if grain == "channel":
+        return storage.load_pricing_actions_channel(brand)
     return storage.load_pricing_actions(brand)
+
+
+def _load_decisions_by_grain(brand: str, week, grain: str) -> dict:
+    from api import storage
+    if grain == "channel":
+        return storage.load_decisions_channel(brand, week)
+    return storage.load_decisions(brand, week)
+
+
+def _save_decisions_by_grain(data: dict, grain: str):
+    from api import storage
+    if grain == "channel":
+        storage.save_decisions_channel(data)
+    else:
+        storage.save_decisions(data)
+
+
+@app.get("/pricing-actions")
+def get_pricing_actions(
+    request: Request,
+    brand: Optional[str] = Query(None),
+    grain: str = Query("store", description="'store' (default, legacy) or 'channel'"),
+):
+    """Get the weekly pricing action list at the requested grain."""
+    if not brand:
+        return {"items": [], "week": None, "total": 0, "grain": grain}
+    grain = _validate_grain(grain)
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+    return _load_actions_by_grain(brand, grain)
+
+
+@app.get("/channel-stats/{brand}")
+def get_channel_stats(brand: str, request: Request):
+    """Gap stats (chain_uniform_profit vs sum_per_store_profit) from the
+    latest channel_aggregation run. Used by the dashboard to judge whether
+    the uniform-price constraint costs material profit."""
+    from api import storage
+    user = _get_user(request)
+    _check_brand_access(user, brand)
+    return storage.load_channel_aggregation_stats(brand)
 
 
 # ── Authentication helpers ────────────────────────────────────────────────────
@@ -716,29 +976,40 @@ def admin_set_domains(request: Request, domains: list[str]):
 @app.post("/estimate-impact")
 def estimate_impact(payload: ImpactEstimatePayload, request: Request):
     """Recalculate expected velocity/revenue/margin for a manually-set price."""
-    from api import storage
     from api.pricing_math import estimate_manual_price_impact
     user = _get_user(request)
     _check_brand_access(user, payload.brand)
 
-    # Find the action row
-    actions_data = storage.load_pricing_actions(payload.brand)
+    grain = _validate_grain(payload.grain)
+    actions_data = _load_actions_by_grain(payload.brand, grain)
+
     action = None
-    for item in actions_data.get("items", []):
-        if item.get("parent_sku") == payload.parent_sku and str(item.get("store")) == str(payload.store):
-            action = item
-            break
+    if grain == "channel":
+        if not payload.channel:
+            raise HTTPException(400, "channel required when grain='channel' ('bm' or 'ecomm')")
+        channel = payload.channel.lower()
+        if channel not in ("bm", "ecomm"):
+            raise HTTPException(400, "channel must be 'bm' or 'ecomm'")
+        for item in actions_data.get("items", []):
+            if item.get("parent_sku") == payload.parent_sku and str(item.get("channel")) == channel:
+                action = item
+                break
+        if not action:
+            raise HTTPException(404, f"Channel action not found: {payload.parent_sku} / {channel}")
+    else:
+        if not payload.store:
+            raise HTTPException(400, "store required when grain='store'")
+        for item in actions_data.get("items", []):
+            if item.get("parent_sku") == payload.parent_sku and str(item.get("store")) == str(payload.store):
+                action = item
+                break
+        if not action:
+            raise HTTPException(404, f"Action not found: {payload.parent_sku} in store {payload.store}")
 
-    if not action:
-        raise HTTPException(404, f"Action not found: {payload.parent_sku} in store {payload.store}")
-
-    # Load elasticity for this SKU if available
+    # estimate_manual_price_impact reads current_price, current_list_price,
+    # current_velocity, unit_cost from the action dict — these keys exist
+    # in both per-store and per-channel rows, so no special-casing needed.
     elasticity = None
-    elast_data = storage.load_elasticity_summary(payload.brand)
-    # The summary doesn't have per-SKU elasticity, but we can use the action's
-    # implied data. For a more precise estimate, we'd need the full parquet.
-    # For now, use the pricing_math function which handles the fallback.
-
     result = estimate_manual_price_impact(action, payload.manual_price, elasticity)
     return result
 
@@ -746,10 +1017,14 @@ def estimate_impact(payload: ImpactEstimatePayload, request: Request):
 # ── Decisions (storage-backed) ────────────────────────────────────────────────
 
 @app.get("/decisions")
-def get_decisions(brand: str = Query(...), week: Optional[str] = Query(None)):
-    """Get decisions for a brand (latest week by default)."""
-    from api import storage
-    return storage.load_decisions(brand, week)
+def get_decisions(
+    brand: str = Query(...),
+    week: Optional[str] = Query(None),
+    grain: str = Query("store"),
+):
+    """Get decisions for a brand at the requested grain (latest week by default)."""
+    grain = _validate_grain(grain)
+    return _load_decisions_by_grain(brand, week, grain)
 
 
 @app.post("/decisions")
@@ -761,9 +1036,15 @@ def save_decision(payload: DecisionPayload, request: Request):
         raise HTTPException(403, "Permission 'approve' required")
     _check_brand_access(user, payload.brand)
 
-    data = storage.load_decisions(payload.brand, payload.week)
+    grain = _validate_grain(payload.grain)
+    if grain == "channel" and payload.chain_scope:
+        # At channel grain the row IS the chain-channel action; chain_scope doesn't apply
+        raise HTTPException(400, "chain_scope is not valid when grain='channel'")
+
+    data = _load_decisions_by_grain(payload.brand, payload.week, grain)
     data["week"] = payload.week
     data["brand"] = payload.brand.lower()
+    data.setdefault("decisions", {})
 
     if payload.status is None or payload.status == "":
         data["decisions"].pop(payload.key, None)
@@ -778,11 +1059,13 @@ def save_decision(payload: DecisionPayload, request: Request):
             record["manual_price"] = payload.manual_price
         if payload.estimated_impact is not None:
             record["estimated_impact"] = payload.estimated_impact
-        if payload.chain_scope is not None:
+        if payload.chain_scope is not None and grain == "store":
             record["chain_scope"] = payload.chain_scope
 
-        # Chain-wide: write to individual store keys that match the scope
-        if payload.chain_scope and payload.status:
+        # Chain-scope fan-out (legacy per-store path only) — writes to individual
+        # store keys that match the scope. At grain=channel this fan-out is not
+        # needed; the key already represents the channel.
+        if grain == "store" and payload.chain_scope and payload.status:
             from config.vendor_brands import is_ecomm_store
             if "-chain-" not in payload.key:
                 raise HTTPException(400, f"Invalid chain key format: {payload.key}")
@@ -802,14 +1085,13 @@ def save_decision(payload: DecisionPayload, request: Request):
                 if store_key not in data["decisions"]:  # store-level takes priority
                     data["decisions"][store_key] = {**record, "chain_key": payload.key}
                     changed += 1
-            # Also store the chain-level record for reference
             data["decisions"][payload.key] = record
             action = f"chain_{payload.status}_{payload.chain_scope}"
         else:
             data["decisions"][payload.key] = record
             action = payload.status
 
-    storage.save_decisions(data)
+    _save_decisions_by_grain(data, grain)
     storage.append_audit({
         "brand": payload.brand.lower(),
         "user_email": user["email"],
@@ -817,8 +1099,9 @@ def save_decision(payload: DecisionPayload, request: Request):
         "action": action,
         "key": payload.key,
         "week": payload.week,
+        "grain": grain,
     })
-    return {"ok": True, "total": len(data["decisions"])}
+    return {"ok": True, "total": len(data["decisions"]), "grain": grain}
 
 
 @app.post("/decisions/bulk")
@@ -830,9 +1113,11 @@ def bulk_decisions(payload: BulkDecisionPayload, request: Request):
         raise HTTPException(403, "Permission 'approve' required")
     _check_brand_access(user, payload.brand)
 
-    data = storage.load_decisions(payload.brand, payload.week)
+    grain = _validate_grain(payload.grain)
+    data = _load_decisions_by_grain(payload.brand, payload.week, grain)
     data["week"] = payload.week
     data["brand"] = payload.brand.lower()
+    data.setdefault("decisions", {})
 
     changed = 0
     for key in payload.keys:
@@ -844,7 +1129,7 @@ def bulk_decisions(payload: BulkDecisionPayload, request: Request):
             }
             changed += 1
 
-    storage.save_decisions(data)
+    _save_decisions_by_grain(data, grain)
     if changed:
         storage.append_audit({
             "brand": payload.brand.lower(),
@@ -853,8 +1138,9 @@ def bulk_decisions(payload: BulkDecisionPayload, request: Request):
             "action": f"bulk_{payload.status}",
             "count": changed,
             "week": payload.week,
+            "grain": grain,
         })
-    return {"ok": True, "total": len(data["decisions"])}
+    return {"ok": True, "total": len(data["decisions"]), "grain": grain}
 
 
 # ── Planner Approval (two-step workflow) ──────────────────────────────────────
@@ -864,6 +1150,7 @@ class PlannerDecisionPayload(BaseModel):
     week: str
     keys: list[str]
     status: str  # "planner_approved" or "planner_rejected"
+    grain: Optional[str] = "store"
 
 
 @app.post("/decisions/plan")
@@ -878,9 +1165,11 @@ def planner_decide(payload: PlannerDecisionPayload, request: Request):
     if payload.status not in ("planner_approved", "planner_rejected"):
         raise HTTPException(400, "Status must be 'planner_approved' or 'planner_rejected'")
 
-    data = storage.load_decisions(payload.brand, payload.week)
+    grain = _validate_grain(payload.grain)
+    data = _load_decisions_by_grain(payload.brand, payload.week, grain)
     data["week"] = payload.week
     data["brand"] = payload.brand.lower()
+    data.setdefault("decisions", {})
 
     bm_statuses = {"bm_approved", "bm_rejected", "bm_manual", "approved", "rejected", "manual"}
     changed = 0
@@ -897,7 +1186,7 @@ def planner_decide(payload: PlannerDecisionPayload, request: Request):
         data["decisions"][key] = rec
         changed += 1
 
-    storage.save_decisions(data)
+    _save_decisions_by_grain(data, grain)
     if changed:
         storage.append_audit({
             "brand": payload.brand.lower(),
@@ -906,24 +1195,29 @@ def planner_decide(payload: PlannerDecisionPayload, request: Request):
             "action": f"planner_{payload.status}",
             "count": changed,
             "week": payload.week,
+            "grain": grain,
         })
-    return {"ok": True, "changed": changed, "total": len(data["decisions"])}
+    return {"ok": True, "changed": changed, "total": len(data["decisions"]), "grain": grain}
 
 
 @app.get("/decisions/planner-queue")
-def planner_queue(request: Request, brand: str = Query(...)):
-    """Get items awaiting planner approval for a brand."""
-    from api import storage
+def planner_queue(
+    request: Request,
+    brand: str = Query(...),
+    grain: str = Query("store"),
+):
+    """Get items awaiting planner approval for a brand at the requested grain."""
     user = _get_user(request)
     if "plan" not in user.get("permissions", []):
         raise HTTPException(403, "Permission 'plan' required")
     _check_brand_access(user, brand)
 
-    ad = storage.load_pricing_actions(brand)
+    grain = _validate_grain(grain)
+    ad = _load_actions_by_grain(brand, grain)
     items = ad.get("items", [])
     week = ad.get("week")
 
-    dec_data = storage.load_decisions(brand, week)
+    dec_data = _load_decisions_by_grain(brand, week, grain)
     dec_map = dec_data.get("decisions", {})
 
     # Items that BMs have decided but planners haven't reviewed
@@ -932,7 +1226,21 @@ def planner_queue(request: Request, brand: str = Query(...)):
 
     queue = []
     for item in items:
-        key = f"{item.get('parent_sku')}-{item.get('store')}"
+        # Key format depends on grain:
+        #   store   → {parent_sku}-{store}
+        #   channel → {parent_sku}-{channel}  (channel in {'bm','ecomm'})
+        # Defend against a missing channel/store field in the CSV — without this
+        # the key would form as "{parent}-" and silently miss the decisions map.
+        if grain == "channel":
+            ch = item.get("channel") or ""
+            if not ch:
+                continue
+            key = f"{item.get('parent_sku')}-{ch}"
+        else:
+            store = item.get("store") or ""
+            if not store:
+                continue
+            key = f"{item.get('parent_sku')}-{store}"
         dec = dec_map.get(key, {})
         status = dec.get("status", "")
         if status in bm_decided_statuses and status not in planner_done_statuses:
@@ -945,7 +1253,7 @@ def planner_queue(request: Request, brand: str = Query(...)):
                 "manual_price": dec.get("manual_price"),
             })
 
-    return {"brand": brand, "week": week, "total": len(queue), "items": queue}
+    return {"brand": brand, "week": week, "total": len(queue), "items": queue, "grain": grain}
 
 
 # ── Audit log ─────────────────────────────────────────────────────────────────
@@ -1015,6 +1323,7 @@ def export_price_changes(
     request: Request,
     brand: str = Query(...),
     format: str = Query("excel", enum=["excel", "text"]),
+    grain: str = Query("store"),
 ):
     """Export approved price changes as Excel or plain text."""
     from api import storage
@@ -1023,16 +1332,26 @@ def export_price_changes(
         raise HTTPException(403, "Permission 'export' required")
     _check_brand_access(user, brand)
 
-    ad = storage.load_pricing_actions(brand)
+    grain = _validate_grain(grain)
+    ad = _load_actions_by_grain(brand, grain)
     if not ad.get("items"):
         raise HTTPException(404, "No pricing actions found")
     df = pd.DataFrame(ad["items"])
     week = ad["week"]
 
-    dec_data = storage.load_decisions(brand, week)
+    dec_data = _load_decisions_by_grain(brand, week, grain)
     dec_map = dec_data.get("decisions", {})
 
-    df["_key"] = df["parent_sku"].astype(str) + "-" + df["store"].astype(str)
+    if grain == "channel":
+        # Channel key: {parent_sku}-{bm|ecomm}
+        # Drop rows with a missing channel value before key-building — they
+        # can never match a decision and would otherwise produce a stray
+        # "{parent}-nan" / "{parent}-" key that silently excludes the row.
+        df = df[df["channel"].astype(str).isin(["bm", "ecomm"])].copy()
+        df["_key"] = df["parent_sku"].astype(str) + "-" + df["channel"].astype(str)
+    else:
+        df = df[df["store"].astype(str).str.len() > 0].copy()
+        df["_key"] = df["parent_sku"].astype(str) + "-" + df["store"].astype(str)
     # When planner approval is required, only planner_approved items export.
     # Legacy "approved"/"manual" are included for backward compat during rollout.
     require_planner = os.getenv("REQUIRE_PLANNER_APPROVAL", "").lower() in ("true", "1")
@@ -1070,14 +1389,15 @@ def export_price_changes(
         "action": f"export_{format}",
         "count": len(approved),
         "week": week,
+        "grain": grain,
     })
 
     if format == "text":
-        return _export_text(brand, week, increases, markdowns)
-    return _export_excel(brand, week, increases, markdowns)
+        return _export_text(brand, week, increases, markdowns, grain=grain)
+    return _export_excel(brand, week, increases, markdowns, grain=grain)
 
 
-def _export_text(brand, week, increases, markdowns):
+def _export_text(brand, week, increases, markdowns, grain="store"):
     """Plain text export for copy-paste into messaging."""
     lines = []
     total = len(increases) + len(markdowns)
@@ -1127,7 +1447,7 @@ def _export_text(brand, week, increases, markdowns):
     return PlainTextResponse("\n".join(lines))
 
 
-def _export_excel(brand, week, increases, markdowns):
+def _export_excel(brand, week, increases, markdowns, grain="store"):
     """Excel export with formatted sheets."""
     import io
     from api import storage
@@ -1176,31 +1496,53 @@ def _export_excel(brand, week, increases, markdowns):
         for ci, w in enumerate(col_widths, 1):
             ws.column_dimensions[get_column_letter(ci)].width = w
 
-    if len(increases) > 0:
-        ws = wb.create_sheet("Subir Precio")
-        cols = [
+    # Column definitions vary by grain: channel rows have 'channel' instead of 'store_name'.
+    if grain == "channel":
+        increase_cols = [
+            ("SKU", "parent_sku"), ("Producto", "product"), ("Canal", "channel"),
+            ("Tiendas", "n_stores"),
+            ("Precio Actual", "current_price"), ("Precio Nuevo", "recommended_price"),
+            ("Delta Rev/Sem", "rev_delta"),
+        ]
+        increase_widths = [18, 35, 10, 10, 15, 15, 15]
+        markdown_cols = [
+            ("SKU", "parent_sku"), ("Producto", "product"), ("Canal", "channel"),
+            ("Tiendas", "n_stores"),
+            ("Descuento", "recommended_discount"), ("Precio Actual", "current_price"),
+            ("Precio Nuevo", "recommended_price"), ("Urgencia", "urgency"),
+            ("Delta Rev/Sem", "rev_delta"),
+        ]
+        markdown_widths = [18, 30, 10, 10, 12, 15, 15, 12, 15]
+    else:
+        increase_cols = [
             ("SKU", "parent_sku"), ("Producto", "product"), ("Tienda", "store_name"),
             ("Precio Actual", "current_price"), ("Precio Nuevo", "recommended_price"),
             ("Delta Rev/Sem", "rev_delta"),
         ]
-        build_sheet(ws, f"SUBIR PRECIO — {brand.upper()}", increases.to_dict('records'),
-                    cols, [18, 35, 25, 15, 15, 15])
-
-    if len(markdowns) > 0:
-        ws = wb.create_sheet("Rebajas")
-        cols = [
+        increase_widths = [18, 35, 25, 15, 15, 15]
+        markdown_cols = [
             ("SKU", "parent_sku"), ("Producto", "product"), ("Tienda", "store_name"),
             ("Descuento", "recommended_discount"), ("Precio Actual", "current_price"),
             ("Precio Nuevo", "recommended_price"), ("Urgencia", "urgency"),
             ("Delta Rev/Sem", "rev_delta"),
         ]
+        markdown_widths = [18, 30, 25, 12, 15, 15, 12, 15]
+
+    if len(increases) > 0:
+        ws = wb.create_sheet("Subir Precio")
+        build_sheet(ws, f"SUBIR PRECIO — {brand.upper()}", increases.to_dict('records'),
+                    increase_cols, increase_widths)
+
+    if len(markdowns) > 0:
+        ws = wb.create_sheet("Rebajas")
         build_sheet(ws, f"REBAJAS — {brand.upper()}", markdowns.to_dict('records'),
-                    cols, [18, 30, 25, 12, 15, 15, 12, 15])
+                    markdown_cols, markdown_widths)
 
     buffer = io.BytesIO()
     wb.save(buffer)
 
-    filename = f"cambios_precio_{brand.lower()}_{week}.xlsx"
+    suffix = f"_{grain}" if grain == "channel" else ""
+    filename = f"cambios_precio_{brand.lower()}{suffix}_{week}.xlsx"
     storage.save_export(brand, filename, buffer.getvalue())
 
     buffer.seek(0)

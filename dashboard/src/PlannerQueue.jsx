@@ -28,7 +28,7 @@ function StatusBadge({ status, manualPrice }) {
   return <span className="pq-badge">{status}</span>
 }
 
-export default function PlannerQueue({ brand, authFetch, showToast }) {
+export default function PlannerQueue({ brand, grain = 'store', authFetch, showToast }) {
   const [items, setItems] = useState([])
   const [week, setWeek] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -38,8 +38,11 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
     if (!brand) return
     const controller = new AbortController()
     setLoading(true)
-    setSelected(new Set())  // reset selection on brand change
-    authFetch(`/decisions/planner-queue?brand=${brand}`, { signal: controller.signal })
+    setSelected(new Set())  // reset selection on brand/grain change
+    const url = grain === 'channel'
+      ? `/decisions/planner-queue?brand=${brand}&grain=channel`
+      : `/decisions/planner-queue?brand=${brand}`
+    authFetch(url, { signal: controller.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
@@ -51,7 +54,7 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
       })
       .catch(e => { if (e.name !== 'AbortError') { setLoading(false); showToast?.(e.message || 'Error cargando cola', 'error') } })
     return () => controller.abort()
-  }, [brand, authFetch])
+  }, [brand, grain, authFetch])
 
   const toggleSelect = (key) => {
     setSelected(prev => {
@@ -73,7 +76,7 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
     authFetch('/decisions/plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ brand, week, keys, status }),
+      body: JSON.stringify({ brand, week, keys, status, grain }),
     })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -91,17 +94,19 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
       .catch(e => showToast?.(e.message || 'Error guardando', 'error'))
   }
 
-  // Group by store for overview
+  // Group by store (grain=store) or channel (grain=channel) for overview
   const storeGroups = useMemo(() => {
     const map = {}
     items.forEach(i => {
-      const s = i.store_name || i.store
+      const s = grain === 'channel'
+        ? (i.channel === 'ecomm' ? 'Ecomm' : 'B&M')
+        : (i.store_name || i.store)
       if (!map[s]) map[s] = { name: s, count: 0, revDelta: 0 }
       map[s].count++
       map[s].revDelta += Number(i.rev_delta) || 0
     })
     return Object.values(map).sort((a, b) => b.count - a.count)
-  }, [items])
+  }, [items, grain])
 
   if (loading) return <div className="pq-loading">Cargando cola de aprobacion...</div>
 
@@ -152,7 +157,7 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
                   <th></th>
                   <th>SKU</th>
                   <th>Producto</th>
-                  <th>Tienda</th>
+                  <th>{grain === 'channel' ? 'Canal' : 'Tienda'}</th>
                   <th>Decision BM</th>
                   <th>Precio actual</th>
                   <th>Precio rec.</th>
@@ -170,7 +175,7 @@ export default function PlannerQueue({ brand, authFetch, showToast }) {
                     </td>
                     <td className="pq-mono">{item.parent_sku}</td>
                     <td className="pq-product">{String(item.product || '').slice(0, 30)}</td>
-                    <td>{item.store_name || item.store}</td>
+                    <td>{grain === 'channel' ? (item.channel === 'ecomm' ? 'Ecomm' : 'B&M') : (item.store_name || item.store)}</td>
                     <td><StatusBadge status={item.bm_status} manualPrice={item.manual_price} /></td>
                     <td className="pq-mono">{clp(item.current_price)}</td>
                     <td className="pq-mono">{item.manual_price ? clp(item.manual_price) : clp(item.recommended_price)}</td>

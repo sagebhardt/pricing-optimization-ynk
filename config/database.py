@@ -110,6 +110,12 @@ DW_BRAND_BANNERS = {
     "BELSPORT": ["Belsport", "Belsport Kids"],
 }
 
+# Brands that roll per-store recommendations into one action per parent x channel
+# (B&M vs ecomm). Multi-store brands benefit most from the collapse; small-store
+# brands (HOKA=3, OAKLEY=8) keep per-store grain to preserve model fidelity.
+# Empty set → channel_aggregate step runs for all brands.
+CHANNEL_GRAIN_BRANDS = {"BELSPORT", "BOLD", "BAMERS"}
+
 # Backwards compatibility
 HOKA_STORES = BRANDS["HOKA"]["stores_active"]
 HOKA_STORES_ALL = BRANDS["HOKA"]["stores_all"]
