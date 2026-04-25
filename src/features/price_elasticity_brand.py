@@ -118,18 +118,51 @@ def prepare_elasticity_data(brand: str):
         0,
     )
 
+    # Flag normal-price weeks using YNK's curated reference price
+    # (auxiliar.precio_normal). Markdown weeks have an additional event-driven
+    # demand boost on top of the price-elasticity response — including them
+    # inflates elasticity estimates. By tagging them we can let
+    # estimate_elasticity_sku exclude them from the regression.
+    pn_path = raw / "precio_normal.parquet"
+    if pn_path.exists():
+        pn_df = pd.read_parquet(pn_path)[["sku", "precio_normal"]].rename(
+            columns={"sku": "codigo_padre"}
+        )
+        weekly = weekly.merge(pn_df, on="codigo_padre", how="left")
+        # Within 5% of reference = normal-price week. SKUs without coverage
+        # in precio_normal default to normal=True (no filtering applied).
+        weekly["is_normal_price"] = np.where(
+            weekly["precio_normal"].notna() & (weekly["precio_normal"] > 0),
+            weekly["avg_price"] >= weekly["precio_normal"] * 0.95,
+            True,
+        )
+        n_normal = int(weekly["is_normal_price"].sum())
+        n_total = len(weekly)
+        print(f"  precio_normal coverage: {weekly['precio_normal'].notna().sum():,}/{n_total:,} rows; "
+              f"normal-price weeks: {n_normal:,} ({100*n_normal/max(n_total,1):.0f}%)")
+    else:
+        weekly["is_normal_price"] = True
+
     return weekly
 
 
-def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10):
+def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
+                            exclude_markdown=True):
     """
     Estimate price elasticity per parent SKU using log-log OLS.
     Returns elasticity only when there's enough price variation.
 
     Uses numpy arrays and np.linalg.lstsq directly (avoids pd.get_dummies
     and sklearn overhead per iteration — critical for 6K+ parent SKUs).
+
+    When exclude_markdown=True (default) and the data has an `is_normal_price`
+    column, markdown weeks are filtered before fitting. This isolates true
+    price elasticity from the markdown-event demand boost. SKUs that lose
+    all price variation after filtering get skipped (they fall through to
+    category-level elasticity).
     """
     results = []
+    use_normal_filter = exclude_markdown and "is_normal_price" in data.columns
 
     # Pre-compute global month codes for one-hot encoding
     unique_months = np.sort(data["month"].unique())
@@ -139,6 +172,14 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10)
     for parent, group in data.groupby("codigo_padre"):
         if len(group) < min_observations:
             continue
+
+        if use_normal_filter:
+            normal_group = group[group["is_normal_price"]]
+            # Only filter when the SKU still has enough observations after
+            # excluding markdown weeks. Otherwise fall through to the legacy
+            # path so we don't lose the SKU entirely.
+            if len(normal_group) >= min_observations:
+                group = normal_group
 
         # Check price variation (coefficient of variation)
         price_cv = group["avg_price"].std() / group["avg_price"].mean()

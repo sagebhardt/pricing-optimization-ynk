@@ -114,6 +114,47 @@ def _extract_official_prices_from_dw(parent_skus):
             except Exception: pass
 
 
+def _extract_precio_normal_from_dw(parent_skus):
+    """Pull YNK reference (normal) prices per parent SKU from auxiliar.precio_normal.
+
+    `auxiliar.precio_normal` is YNK's curated reference price table — distinct
+    from `sap_s4.producto_precio_padre` (which has multiple SAP price lists with
+    validity windows). One row per parent SKU with the current "normal" retail
+    price + a `fecha_creacion` (when the price was last set).
+
+    Used by the elasticity step to flag (sku, week) rows as "at normal price"
+    vs "discounted." Cleaner elasticity estimates by excluding markdown weeks
+    from the regression — addresses the "elasticity conflated with markdown
+    effects" issue noted in CLAUDE.md.
+
+    Returns DataFrame with columns ['sku', 'precio_normal', 'fecha_creacion']
+    or None on error / empty result.
+    """
+    if not parent_skus:
+        return None
+    conn = None
+    try:
+        conn = get_connection()
+        placeholders = ",".join(["%s"] * len(parent_skus))
+        query = f"""
+            SELECT sku_padre_id AS sku,
+                   precio_normal,
+                   fecha_creacion
+            FROM auxiliar.precio_normal
+            WHERE sku_padre_id IN ({placeholders})
+              AND precio_normal > 0
+        """
+        df = pd.read_sql(query, conn, params=tuple(parent_skus))
+        return df if len(df) > 0 else None
+    except Exception as e:
+        print(f"  auxiliar.precio_normal extraction skipped: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
 def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
     """Pull per-SKU per-store daily stock from sap_s4.stock.
 
@@ -562,6 +603,18 @@ def extract_brand(brand_name: str):
             pct = 100 * len(op_df) / len(parent_skus)
             print(f"  Generated official_prices.parquet: {len(op_df):,} / {len(parent_skus):,} parents "
                   f"({pct:.0f}% coverage from datawarehouse)")
+
+    # 10b. YNK reference normal prices from auxiliar.precio_normal — used by the
+    # elasticity step to flag markdown vs normal-price weeks. Distinct from
+    # official_prices.parquet (which is sap_s4.producto_precio_padre's MAX over
+    # SAP price lists with validity windows).
+    if parent_skus:
+        pn_df = _extract_precio_normal_from_dw(parent_skus)
+        if pn_df is not None and len(pn_df) > 0:
+            pn_df.to_parquet(raw_dir / "precio_normal.parquet", index=False)
+            pct = 100 * len(pn_df) / len(parent_skus)
+            print(f"  Generated precio_normal.parquet: {len(pn_df):,} / {len(parent_skus):,} parents "
+                  f"({pct:.0f}% coverage from auxiliar.precio_normal)")
 
     # 11. Backorder signal — open PO units per (sku, centro) from sap_s4.
     # Net-new feature: enables pricing to see incoming supply when stock is low.

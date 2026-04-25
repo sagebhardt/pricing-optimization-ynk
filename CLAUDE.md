@@ -39,10 +39,10 @@ rm -rf api/static && cp -r dashboard/dist api/static  # Copy to API static dir
 Pipeline (runs in Cloud Run Job, Monday 6am CLT):
   run_brand.py                    # Pipeline orchestrator (per brand)
   run_pipeline_job.py             # Cloud Run Job entrypoint (subprocess per brand)
-  src/data/extract_brand.py       # PostgreSQL → parquet + costs from ti.productos
-  src/data/extract_brand.py       # PostgreSQL → parquet + costs from ti.productos
-  src/scraping/                     # Competitor pricing scrapers (per-site adapters)
-    scrape_brand.py                 # Orchestrator: runs adapters per brand, fault-isolated
+  src/data/extract_brand.py       # PostgreSQL → parquet + costs from sap_s4.costo
+  src/data/extract_brand.py       # PostgreSQL → parquet + costs from sap_s4.costo
+  src/scraping/                     # Competitor pricing scrapers (per-site adapters, parallel)
+    scrape_brand.py                 # Orchestrator: parallel adapters, historical snapshots
     falabella.py                    # Falabella.com (__NEXT_DATA__ JSON extraction)
     brand_sites.py                  # hoka_cl (WooCommerce API), sparta (GraphQL), marathon (SFCC)
     mercadolibre.py                 # MercadoLibre (OAuth2 — search API blocked as of Mar 2026)
@@ -54,9 +54,11 @@ Pipeline (runs in Cloud Run Job, Monday 6am CLT):
     lifecycle_brand.py            # Launch→Growth→Peak→Steady→Decline→Clearance
     size_curve_brand.py           # Size depletion tracking + alerts
     cross_store_alerts_brand.py   # Cross-store price consistency alerts (channel-aware)
-    competitor_features.py        # ML features from competitor data (price index, gap, pressure)
+    competitor_features.py        # ML features from competitor data (price index, gap, pressure, trends)
     build_enhanced_brand.py       # Merge all → v2 features
     aggregate_parent.py           # Child → parent SKU aggregation (incl margin targets)
+  src/strategy/
+    competitive_intel.py          # Competitive intelligence engine (movements, opportunities, threats, brief)
   src/models/
     train_brand.py                # XGBoost classifier + LightGBM regressor, margin-optimized targets
     weekly_pricing_brand.py       # Weekly actions (IVA-adjusted margins, cost floor, tiers)
@@ -64,9 +66,11 @@ Pipeline (runs in Cloud Run Job, Monday 6am CLT):
 API (Cloud Run, slim image ~50MB):
   Dockerfile                      # API image (no ML deps, no data)
   Dockerfile.pipeline             # Pipeline image (full ML + DB deps)
-  api/main.py                     # FastAPI (auth, decisions, export, admin, audit, analytics, planner)
+  run_competitor_scrape.py        # Standalone mid-week scraping + intelligence job
+  api/main.py                     # FastAPI (auth, decisions, export, admin, audit, analytics, planner, strategy)
   api/storage.py                  # GCS-backed reads (pricing actions, alerts, metadata, SHAP, elasticity)
   api/pricing_math.py             # Pure-math pricing functions (anchor snapping, velocity estimation)
+  api/simulator.py                # Promotion simulator engine (what-if scenarios, optimal discount search)
   config/auth.py                  # Google SSO roles, GCS-backed user config with cache
   config/database.py              # DB config, brand configs, store exclusions
   config/vendor_brands.py         # SKU prefix → vendor brand mapping (Nike, Adidas, etc.)
@@ -76,6 +80,7 @@ API (Cloud Run, slim image ~50MB):
   dashboard/src/StoreSidebar.jsx  # Store/vendor sidebar navigation
   dashboard/src/ManualPriceModal.jsx # Manual price override with impact estimation
   dashboard/src/ChainViewModal.jsx   # Chain-wide view (SKU across all stores)
+  dashboard/src/SimulatorModal.jsx # Promotion simulator (what-if scenarios, optimal discount finder)
   dashboard/src/PlannerQueue.jsx  # Planner approval queue (two-step workflow)
 ```
 
@@ -89,9 +94,11 @@ API (Cloud Run, slim image ~50MB):
 ## Cloud Infrastructure
 - **Cloud Run Service**: `pricing-api` (1 GiB, 1 CPU, min-instances=0)
 - **Cloud Run Job**: `pricing-pipeline` (16 GiB, 8 CPU, 2hr timeout)
+- **Cloud Run Job**: `competitor-scrape` (4 GiB, 2 CPU, 30min timeout) — mid-week scraping + intelligence
 - **Cloud Scheduler**: `pricing-pipeline-weekly` (Monday 09:00 UTC / 6am CLT)
+- **Cloud Scheduler**: `competitor-scrape-midweek` (Wednesday 09:00 CLT) — competitor scraping + intelligence brief
 - **GCS Bucket**: `gs://ynk-pricing-decisions`
-- **DB**: PostgreSQL at `190.54.179.91` (public) / `192.168.18.150` (office)
+- **DB**: PostgreSQL at `190.54.179.91` (public) / `192.168.18.150` (office). Database name: `dwh`. Primary schema: `sap_s4`. Migrated 2026-04-25 from legacy `consultas` / `datawarehouse`.
 - **GCP Project**: `ynk-pricing-optimization`
 - **Estimated cost**: ~$9/month total (API ~$5 with min-instances=0, pipeline ~$3, GCS negligible)
 
@@ -110,7 +117,7 @@ API (Cloud Run, slim image ~50MB):
   - Default (soft rollout): legacy `approved`/`manual` export directly, new `bm_*` statuses need planner
 
 ## Persistence & Storage (GCS)
-- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/`, `outcomes/{brand}/`, `competitors/{brand}/`
+- Pipeline outputs: `weekly_actions/{brand}/`, `alerts/{brand}/`, `models/{brand}/`, `outcomes/{brand}/`, `competitors/{brand}/`, `competitors/{brand}/history/`, `competitors/{brand}/intelligence/`
 - Supplemental data: `data/raw/{brand}/costs.parquet`, `official_prices.parquet`
 - Decisions: `decisions/{brand}/decisions_{week}.json`
 - Audit log: `audit/{brand}/{YYYY-MM}.jsonl`
@@ -125,7 +132,7 @@ API (Cloud Run, slim image ~50MB):
 ```
 DB (PostgreSQL) → extract → parquet (local)
                → scrape_competitors (Falabella, hoka_cl, sparta, marathon)
-               → costs from ti.productos (auto USD→CLP conversion)
+               → costs from sap_s4.costo
                → costs/official_prices from GCS (HOKA override)
                → elasticity (BEFORE features — needed for margin targets)
                → features (+ official prices + margin targets + weather data)
@@ -139,9 +146,10 @@ DB (PostgreSQL) → extract → parquet (local)
 
 ## Step Order (Important)
 ```
-extract → scrape_competitors → elasticity → features → lifecycle → size_curve → enhance → aggregate → cross_store → train → pricing → outcome → sync
+extract → scrape_competitors → elasticity → features → lifecycle → size_curve → enhance → aggregate → cross_store → train → pricing → competitive_intel → outcome → sync
 ```
 Elasticity MUST run before features because `add_margin_targets` reads elasticity data from disk to estimate velocity at different discount levels. On fresh containers, running features first produces low-variance targets (everything clusters at 30-35% discount).
+Competitive intel MUST run after pricing because it reads pricing actions + elasticity to generate opportunities/threats with dollar impact estimates.
 
 ## Training Mode
 All brands use margin-optimized training:
@@ -157,7 +165,24 @@ All brands use margin-optimized training:
 ## Cost Data Sources
 Costs are loaded in order of precedence:
 1. **GCS** (`gs://ynk-pricing-decisions/data/raw/{brand}/costs.parquet`) — manually uploaded, highest quality. Used for HOKA.
-2. **ti.productos** (DB table) — auto-extracted during pipeline. Costs < 500 are treated as USD and multiplied by 1,000 (calibrated against known HOKA costs, median rate 1,013 CLP/USD). Used for BOLD, BAMERS, OAKLEY, BELSPORT.
+2. **sap_s4.costo** (DB table in `dwh`) — auto-extracted during pipeline. Used for BOLD, BAMERS, OAKLEY, BELSPORT. Replaces the legacy `ti.productos` source (which had mixed CLP/USD currencies and required a 1000× heuristic).
+
+## Database schemas (`dwh`)
+PostgreSQL `dwh` database, 13 schemas. Primary source is `sap_s4`. Other populated schemas worth knowing:
+- **`sap_s4`** — SAP master data: producto, costo, stock, factura_*, traspaso_*, orden_compra_*, presupuesto, lista_precio, producto_temporada/marca/color/tipo_material, cliente, etc.
+- **`auxiliar`** — YNK custom data: `precio_normal` (reference prices per parent SKU), `flujo_tiendas` (hourly foot traffic), `calendario` (with season tags), `mix_tiendas` (planned assortment), `rebates` (supplier rebate contributions per SKU/banner/event), `producto_atributos_custom_join` (ranking_venta, ciclo_vida, coleccion, evento).
+- **`marketplace`** — direct API data from external marketplaces: `fala_orders` + `fala_order_items` + `fala_stock_daily` (Falabella), `meli_*` (MercadoLibre — bypasses the 403 we hit on the search API), `ventas_nubimetrics` (competitive intel platform).
+- **`multivende`** — Multivende e-commerce platform: master products, prices, variations, marketplace connections.
+- **`sap_commerce`** — corporate ecommerce orders: usuario, pedido, pedido_detalle, consignacion, producto.
+
+Empty (provisioned but no data yet): `google`, `pos`, `public`, `reports`, `salesforce`, `sap_ewm`, `wholesale`, `woocommerce`.
+
+Untapped tables that would meaningfully improve the model (not yet integrated):
+- `auxiliar.precio_normal` — reference price per parent SKU. Solves the "elasticity conflated with markdown" issue by labeling each transaction as normal vs. discounted.
+- `auxiliar.rebates` — supplier rebate contributions during markdown events. True margin = cost − rebate; current floor calculations are conservative.
+- `auxiliar.flujo_tiendas` — hourly foot traffic (we use weekly_entries, much coarser).
+- `auxiliar.producto_atributos_custom_join` — YNK merchandising tags (ranking, lifecycle, collection).
+- `marketplace.fala_*` / `meli_*` — direct marketplace data; could replace the brittle competitor scraping for Falabella + ML.
 
 ## Margin-Aware Pricing
 - All margin calculations strip IVA (19%): `margin = price/1.19 - cost`
@@ -181,10 +206,10 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 | Brand | Banner | Stores | Training Mode | Regressor R2 | Cost Source |
 |-------|--------|--------|---------------|-------------|-------------|
 | HOKA | HOKA | 3 | Margin-optimized | 0.781 | GCS (376 SKUs) |
-| BOLD | BOLD | 35 | Margin-optimized | 0.648 | ti.productos (5,434 SKUs) |
-| BAMERS | BAMERS | 25 | Margin-optimized | 0.938 | ti.productos (2,084 SKUs) |
-| OAKLEY | OAKLEY | 8 | Margin-optimized | 0.800 | ti.productos (2,211 SKUs) |
-| BELSPORT | BELSPORT | 66 | Margin-optimized | 0.538 (holdout 0.704) | ti.productos (6,422 SKUs) |
+| BOLD | BOLD | 35 | Margin-optimized | 0.648 | sap_s4.costo (5,434 SKUs) |
+| BAMERS | BAMERS | 25 | Margin-optimized | 0.938 | sap_s4.costo (2,084 SKUs) |
+| OAKLEY | OAKLEY | 8 | Margin-optimized | 0.800 | sap_s4.costo (2,211 SKUs) |
+| BELSPORT | BELSPORT | 66 | Margin-optimized | 0.538 (holdout 0.704) | sap_s4.costo (6,422 SKUs) |
 
 ## Adding a New Brand
 1. Add entry to `config/database.py` BRANDS dict (banner, brand codes, stores)
@@ -193,7 +218,7 @@ Drop `data/raw/{brand}/official_prices.parquet` (columns: `sku`, `list_price`) t
 4. Add brand tab to `dashboard/src/App.jsx` BRANDS, BRAND_STATS, ALL_BRANDS
 5. Add brand to `run_pipeline_job.py` BRANDS default list
 6. Run pipeline: `gcloud run jobs execute pricing-pipeline --update-env-vars "PIPELINE_BRANDS=NEWBRAND"`
-7. Costs auto-extracted from `ti.productos`. For manual override: upload `costs.parquet` to GCS.
+7. Costs auto-extracted from `sap_s4.costo`. For manual override: upload `costs.parquet` to GCS.
 
 ## Dashboard UX
 - **View modes**: Lista (flat list), Tiendas (store sidebar), Marcas (vendor brand sidebar)
@@ -230,15 +255,21 @@ Key endpoints (all auth-protected except /health):
 - `POST /decisions/plan` — planner approves/rejects BM decisions
 - `GET /decisions/planner-queue` — items awaiting planner review
 - `GET /export/price-changes` — export approved items (respects manual prices + planner status)
+- `POST /simulate/promotion` — simulate promotional scenario (discount %, duration, filters) → projected impact
+- `POST /simulate/optimal-discount` — find the margin-maximizing discount for filtered products
 - `GET /alerts/cross-store` — cross-store pricing consistency alerts (parent-grouped, nested stores)
+- `GET /strategy/brief/{brand}` — full competitive intelligence brief (position, movements, opportunities, threats)
+- `GET /strategy/opportunities/{brand}` — actionable opportunities ranked by estimated margin impact
+- `GET /strategy/threats/{brand}` — competitive threats ranked by severity
+- `GET /strategy/movements/{brand}` — recent competitor price movements
 
 ## Testing
 ```bash
-python3 -m pytest tests/ -v           # 169 tests, <2s
+python3 -m pytest tests/ -v           # 211 tests, <2s
 python3 -m pytest tests/ --cov=api    # with coverage
 python3 -m pytest tests/ --cov=api    # with coverage
 ```
-Test coverage: pricing_math (97%), vendor_brands (100%), API endpoints, pipeline lift table, role permissions, cross-store alerts, scraping matcher.
+Test coverage: pricing_math (97%), vendor_brands (100%), API endpoints, pipeline lift table, role permissions, cross-store alerts, scraping matcher, competitive intelligence (version matching, movements, positions, opportunities, threats, trends).
 
 ## Deploy Workflow
 ```bash
@@ -309,6 +340,22 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - Auto-discovered by ML model (not in EXCLUDE_COLS); SHAP shows which are predictive
 - Preferred over separate per-category models (Apparel/Equipment have too few rows for reliable models)
 
+## Competitive Intelligence Engine
+- `src/strategy/competitive_intel.py` — generates weekly intelligence brief per brand
+- **Price movements**: detects drops, raises, promo starts/ends, new listings, delistings between weeks
+- **Position map**: classifies each SKU as leader/parity/follower based on our price vs competitor min
+- **Opportunities**: margin capture (competitor raised price), price leader (inelastic + cheapest), competitor OOS
+- **Threats**: undercut on elastic SKU with weak velocity (critical), coordinated drops (market shift)
+- **Dollar impact**: estimated weekly margin gain/risk using elasticity + velocity + IVA-adjusted margin math
+- **Trend features for ML**: `comp_price_delta_1w/4w`, `comp_discount_trend_4w`, `comp_promo_active/weeks`
+- Output: `data/processed/{brand}/competitive_brief.json` + `competitor_trend_features.parquet`
+- GCS: `competitors/{brand}/intelligence/competitive_brief.json`
+- API: `GET /strategy/brief/{brand}`, `/strategy/opportunities/{brand}`, `/strategy/threats/{brand}`, `/strategy/movements/{brand}`
+- Historical data: `competitors/{brand}/history/competitor_prices_{YYYY-WW}.parquet` — one snapshot per week
+- **Mid-week scraping**: `run_competitor_scrape.py` — standalone job (scrape + intelligence + GCS sync)
+- **Parallel scraping**: adapters run concurrently via ThreadPoolExecutor (4 workers max)
+- **Version-aware matching**: "Clifton 9" vs "Clifton 8" penalized below match threshold (prevents false positives on model transitions)
+
 ## Cross-Store Pricing Consistency Alerts
 - `src/features/cross_store_alerts_brand.py` — detects inconsistencies across stores for same parent SKU
 - Channel-aware: `is_ecomm_store()` from `config/vendor_brands.py` (AB* prefix = ecomm)
@@ -328,14 +375,14 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - C&C columns (`click_collect_units`, `instore_units`, `instore_velocity_4w`, `click_collect_ratio`) excluded from model training (in `EXCLUDE_COLS` in both `train_brand.py` and `weekly_pricing_brand.py`)
 
 ## Known Issues
-- Elasticity estimates conflated with markdown effects — consider excluding markdown periods
+- Elasticity estimates conflated with markdown effects — `auxiliar.precio_normal` is now available in `dwh`; integrate into `price_elasticity_brand.py` to exclude markdown weeks from the regression
 - Belsport has no stock table yet (`stock_belsport` doesn't exist) — uses sales proxy for size curve
-- `ynk.precios_ofertas` still missing — blocks clean markdown event detection
-- ti.productos costs have mixed currencies (USD/CLP) — using 1000x heuristic for conversion
 - BELSPORT regressor R2 (CV=0.538) improved significantly but holdout (0.704) suggests more room
 - Size curve alerts filtered to latest week only (BELSPORT was generating 3.4M rows across all weeks)
 - Vendor brand prefixes verified from production data; OAKLEY "Other" = optical services (SERV/SFSS), expected
 - Lifecycle thresholds validated: velocity monotonically decreases peak→steady→decline across all brands
 - `api/static/` is gitignored — must run `cp -r dashboard/dist api/static` before API deploy
 - MercadoLibre search API locked down (403) — seller-type OAuth2 tokens lack search scope
-- Falabella rate limits aggressively — 4s delay between requests, may need tuning at scale
+- Ripley blocked by CloudFlare (403) — needs ZenRows proxy or Playwright
+- Marathon adapter: uses JSON-LD from product pages (primary tile regex removed); discount data depends on `highPrice` field
+- Falabella stock signal: now returns None (unknown) when variant data unavailable — `comp_in_stock_count` no longer inflated
