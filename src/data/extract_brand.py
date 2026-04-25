@@ -14,14 +14,25 @@ import pandas as pd
 import psycopg2
 from pathlib import Path
 from config.database import (
-    DB_CONFIG, BRANDS, EXCLUDE_SKUS, STOCK_TABLES,
+    DB_CONFIG, DW_DB_CONFIG, BRANDS, EXCLUDE_SKUS, STOCK_TABLES,
     DW_STOCK_BANNERS, DW_BRAND_BANNERS,
 )
 from config.price_lists import classify_price_list
 
 
 def get_connection():
+    """Connect to the legacy `consultas` DB (where ventas.* lives)."""
     return psycopg2.connect(**DB_CONFIG)
+
+
+def get_dw_connection():
+    """Connect to the new `dwh` DB (where sap_s4.* and auxiliar.* live).
+
+    Post-2026-04-25 IT migration: SAP master data moved out of
+    consultas.datawarehouse into dwh.sap_s4, but YNK's Tableau-backed
+    ventas.* tables stayed in consultas. extract_brand uses both DBs.
+    """
+    return psycopg2.connect(**DW_DB_CONFIG)
 
 
 def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
@@ -37,7 +48,7 @@ def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
         return None
     conn = None
     try:
-        conn = get_connection()
+        conn = get_dw_connection()
         placeholders = ",".join(["%s"] * len(parent_skus))
         query = f"""
             WITH brand_children AS (
@@ -92,7 +103,7 @@ def _extract_official_prices_from_dw(parent_skus):
         return None
     conn = None
     try:
-        conn = get_connection()
+        conn = get_dw_connection()
         placeholders = ",".join(["%s"] * len(parent_skus))
         query = f"""
             SELECT sku_padre_sap AS sku,
@@ -134,7 +145,7 @@ def _extract_precio_normal_from_dw(parent_skus):
         return None
     conn = None
     try:
-        conn = get_connection()
+        conn = get_dw_connection()
         placeholders = ",".join(["%s"] * len(parent_skus))
         query = f"""
             SELECT sku_padre_id AS sku,
@@ -171,7 +182,7 @@ def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
         return None
     conn = None
     try:
-        conn = get_connection()
+        conn = get_dw_connection()
         sku_placeholders = ",".join(["%s"] * len(parent_skus))
         banner_placeholders = ",".join(["%s"] * len(banner_ids))
         query = f"""
@@ -219,7 +230,7 @@ def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
         return None
     conn = None
     try:
-        conn = get_connection()
+        conn = get_dw_connection()
         placeholders = ",".join(["%s"] * len(banner_names))
         query = f"""
             SELECT DISTINCT
@@ -262,7 +273,7 @@ def _extract_backorder_from_dw(parent_skus, banner_names, lookback_months: int =
         return None
     conn = None
     try:
-        conn = get_connection()
+        conn = get_dw_connection()
         sku_ph = ",".join(["%s"] * len(parent_skus))
         ban_ph = ",".join(["%s"] * len(banner_names))
         query = f"""
@@ -320,7 +331,7 @@ def _extract_replenishment_from_dw(parent_skus, banner_names, lookback_weeks: in
         return None
     conn = None
     try:
-        conn = get_connection()
+        conn = get_dw_connection()
         sku_ph = ",".join(["%s"] * len(parent_skus))
         ban_ph = ",".join(["%s"] * len(banner_names))
         query = f"""

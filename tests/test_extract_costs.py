@@ -18,7 +18,7 @@ class TestExtractCostsFromDw:
             "n_children_with_cost": [10, 12],
             "n_children_total": [10, 12],
         })
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_costs_from_dw(["HKABC", "HKDEF"])
         assert read_sql.called
@@ -35,13 +35,13 @@ class TestExtractCostsFromDw:
             "n_children_with_cost": [1],
             "n_children_total": [10],
         })
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw):
             eb._extract_costs_from_dw(["SPARSE"])
         assert "<30% child coverage" in capsys.readouterr().out
 
     def test_returns_none_on_db_error(self):
-        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+        with patch.object(eb, "get_dw_connection", side_effect=RuntimeError("net")):
             assert eb._extract_costs_from_dw(["HKABC"]) is None
 
 
@@ -83,7 +83,7 @@ class TestExtractOfficialPricesFromDw:
 
     def test_returns_dataframe_on_success(self):
         raw = pd.DataFrame({"sku": ["HKABC", "HKDEF"], "list_price": [49990, 129990]})
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_official_prices_from_dw(["HKABC", "HKDEF"])
         assert read_sql.called
@@ -95,7 +95,7 @@ class TestExtractOfficialPricesFromDw:
         pd.testing.assert_frame_equal(out, raw)
 
     def test_returns_none_on_db_error(self):
-        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+        with patch.object(eb, "get_dw_connection", side_effect=RuntimeError("net")):
             assert eb._extract_official_prices_from_dw(["HKABC"]) is None
 
 
@@ -115,7 +115,7 @@ class TestExtractStockFromDw:
             "stock_in_transit_units": [2],
             "total_stock_position_units": [7],
         })
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_stock_from_dw(["NI1234"], [1, 4])
         query, _ = read_sql.call_args[0]
@@ -132,7 +132,7 @@ class TestExtractStockFromDw:
         assert out["fecha"].dtype.kind == "M"
 
     def test_returns_none_on_db_error(self):
-        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+        with patch.object(eb, "get_dw_connection", side_effect=RuntimeError("net")):
             assert eb._extract_stock_from_dw(["NI1234"], [1, 4]) is None
 
 
@@ -146,7 +146,7 @@ class TestExtractListNamesFromDw:
             "centro": ["7501", "7501", "7502"],
             "list_name": ["Hoka tiendas", "Liquidación Bold", "Bamers Outlets"],
         })
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_list_names_from_dw(["Hoka"])
         query, _ = read_sql.call_args[0]
@@ -165,7 +165,7 @@ class TestExtractListNamesFromDw:
 
     def test_empty_result_still_returns_empty_df_not_none(self):
         raw = pd.DataFrame(columns=["folio", "list_name"])
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw):
             out = eb._extract_list_names_from_dw(["Hoka"])
         assert out is not None
@@ -174,7 +174,7 @@ class TestExtractListNamesFromDw:
         assert "list_category" in out.columns
 
     def test_returns_none_on_db_error(self):
-        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+        with patch.object(eb, "get_dw_connection", side_effect=RuntimeError("net")):
             assert eb._extract_list_names_from_dw(["Hoka"]) is None
 
 
@@ -194,7 +194,7 @@ class TestExtractBackorderFromDw:
             "earliest_delivery": ["2026-05-15"],
             "n_open_pos": [2],
         })
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_backorder_from_dw(["HK1099673BBLC"], ["Hoka"])
         query, _ = read_sql.call_args[0]
@@ -210,7 +210,7 @@ class TestExtractBackorderFromDw:
         pd.testing.assert_frame_equal(out, raw)
 
     def test_returns_none_on_db_error(self):
-        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+        with patch.object(eb, "get_dw_connection", side_effect=RuntimeError("net")):
             assert eb._extract_backorder_from_dw(["HK"], ["Hoka"]) is None
 
 
@@ -231,7 +231,7 @@ class TestExtractReplenishmentFromDw:
             "avg_transit_days": [3.5],
             "n_transfers": [8],
         })
-        with patch.object(eb, "get_connection", return_value=MagicMock()), \
+        with patch.object(eb, "get_dw_connection", return_value=MagicMock()), \
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_replenishment_from_dw(["HK1162012CYG"], ["Hoka"])
         query, _ = read_sql.call_args[0]
@@ -252,5 +252,5 @@ class TestExtractReplenishmentFromDw:
         pd.testing.assert_frame_equal(out, raw)
 
     def test_returns_none_on_db_error(self):
-        with patch.object(eb, "get_connection", side_effect=RuntimeError("net")):
+        with patch.object(eb, "get_dw_connection", side_effect=RuntimeError("net")):
             assert eb._extract_replenishment_from_dw(["HK1"], ["Hoka"]) is None

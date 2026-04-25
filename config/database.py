@@ -8,9 +8,23 @@ load_dotenv()
 DB_CONFIG = {
     "host": os.getenv("YNK_DB_HOST", ""),
     "port": int(os.getenv("YNK_DB_PORT", "5432")),
-    "dbname": os.getenv("YNK_DB_NAME", "dhw"),
+    "dbname": os.getenv("YNK_DB_NAME", "consultas"),
     "user": os.getenv("YNK_DB_USER", ""),
     "password": os.getenv("YNK_DB_PASSWORD", ""),
+}
+
+# After the 2026-04-25 IT migration, the SAP master data moved from
+# consultas.datawarehouse → dwh.sap_s4. The legacy ventas.* schema (Tableau-
+# fed YNK custom tables: sku_tableau, ventas_por_vendedor, sucursales_tableau,
+# contribucion_mkdown_*) stays in consultas. extract_brand therefore needs two
+# connections: DB_CONFIG (consultas) for ventas.*, DW_DB_CONFIG (dwh) for
+# anything in sap_s4 / auxiliar / marketplace / sap_commerce / multivende.
+DW_DB_CONFIG = {
+    "host": os.getenv("YNK_DW_DB_HOST", os.getenv("YNK_DB_HOST", "")),
+    "port": int(os.getenv("YNK_DW_DB_PORT", os.getenv("YNK_DB_PORT", "5432"))),
+    "dbname": os.getenv("YNK_DW_DB_NAME", "dwh"),
+    "user": os.getenv("YNK_DW_DB_USER", os.getenv("YNK_DB_USER", "")),
+    "password": os.getenv("YNK_DW_DB_PASSWORD", os.getenv("YNK_DB_PASSWORD", "")),
 }
 
 # Service/non-product SKUs to exclude (applies to all brands)
