@@ -278,10 +278,11 @@ class TestChannelAggregationIntegration:
         ])
         store_actions.to_csv(actions / f"pricing_actions_{week.date()}.csv", index=False)
 
-        # Costs: single parent cost
+        # Costs: low enough that volume gain from a 15% markdown clearly
+        # beats holding at full price under the strong elasticity below
         pd.DataFrame([
-            {"sku": "NI1111111111", "cost": 30000},
-            {"sku": "NI2222222222", "cost": 30000},
+            {"sku": "NI1111111111", "cost": 18000},
+            {"sku": "NI2222222222", "cost": 18000},
         ]).to_parquet(raw / "costs.parquet")
 
         # Products catalog (minimal)
@@ -293,9 +294,10 @@ class TestChannelAggregationIntegration:
             for p in parents
         ]).to_parquet(raw / "products.parquet")
 
-        # Elasticity: one row per parent (high confidence)
+        # Elasticity: strongly elastic, so the channel sim has clear room
+        # to recommend the 15% markdown that the per-store CSV recommended.
         pd.DataFrame([
-            {"codigo_padre": p, "elasticity": -1.8, "confidence": "high", "r_squared": 0.8}
+            {"codigo_padre": p, "elasticity": -3.0, "confidence": "high", "r_squared": 0.8}
             for p in parents
         ]).to_parquet(processed / "elasticity_by_sku.parquet")
 
@@ -319,15 +321,23 @@ class TestChannelAggregationIntegration:
         assert "per_parent" in stats
         assert stats["summary"]["n_channel_actions_written"] == len(result)
 
-        # Parent NI1111...: 2 of 3 stores recommend 15%, 1 holds at 0%. If channel picks 15%,
-        # variance = 1/3 (the holding store) = ~33% → mandatory_review True.
-        # If channel picks 0%, variance = 2/3 → also mandatory.
+        # New variance contract: only counts disagreement BETWEEN actioned stores,
+        # not actioned-vs-non-actioned. Parent NI1111... has 2 actioned B&M stores
+        # both recommending 15% → modal=15%, no disagreement → variance=0.0.
         parent1_bm = result[(result["parent_sku"] == "NI1111111111") & (result["channel"] == "bm")]
         if len(parent1_bm) > 0:
             row = parent1_bm.iloc[0]
             assert 0.0 <= row["per_store_variance_pct"] <= 1.0
-            # n_stores should equal the count of B&M stores with features (3)
+            assert row["per_store_variance_pct"] == 0.0, \
+                "Both actioned stores agree on 15% → variance should be 0"
+            # n_stores reflects ALL stores in the channel (incl. the holding one)
             assert row["n_stores"] == 3
+
+        # NI2222... has NO per-store actions in the fixture → classifier gate
+        # filters it out entirely, regardless of what the channel sim would
+        # have recommended.
+        parent2 = result[result["parent_sku"] == "NI2222222222"]
+        assert len(parent2) == 0, "Classifier gate must skip parents with no per-store actions"
 
     def test_skips_brand_not_in_channel_grain(self, tmp_path, monkeypatch):
         # HOKA is not in CHANNEL_GRAIN_BRANDS → step no-ops

@@ -222,9 +222,13 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
     )
     name_map = parent_names.set_index("codigo_padre").to_dict(orient="index")
 
-    # 6. Per-store recommendation map: (parent, store) -> row from pricing_actions CSV
+    # 6. Per-store recommendation map: (parent, store) -> row from pricing_actions CSV.
+    # CRITICAL: cast both keys to str. pd.read_csv auto-casts purely-numeric store
+    # codes (like BOLD's "2002") to int while features_parent.parquet keeps centro
+    # as str. Mismatched types silently miss every lookup, which dropped BOLD into
+    # a 0-row channel output during BAMERS's first successful run.
     store_action_map = {
-        (r["parent_sku"], r["store"]): r
+        (str(r["parent_sku"]), str(r["store"])): r
         for _, r in store_actions.iterrows()
     }
 
@@ -240,6 +244,7 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
     n_written = 0
     n_no_feasible = 0
     n_mandatory = 0
+    n_skipped_no_classifier_signal = 0
 
     for (parent, channel), grp in grouped:
         n_groups += 1
@@ -249,6 +254,21 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
         channel_velocity = float(vel.sum())
         if channel_velocity <= 0:
             # Everyone at zero velocity this week — not a meaningful channel signal
+            continue
+
+        # CLASSIFIER GATE: only emit a channel-level action if the per-store
+        # classifier flagged at least one store in this channel as worth
+        # acting on. Mirrors the markdown_probability >= 0.50 threshold the
+        # per-store path uses (weekly_pricing_brand.py PASS 2). Without
+        # this gate the channel sim ungates the model and recommends
+        # markdowns on noise — first BAMERS run had 99% mandatory_review
+        # because the channel sim was systematically more aggressive
+        # than the trained classifier wanted.
+        channel_has_classifier_signal = any(
+            (str(parent), str(store)) in store_action_map for store in grp["centro"].unique()
+        )
+        if not channel_has_classifier_signal:
+            n_skipped_no_classifier_signal += 1
             continue
 
         # Stock (null if all stores lack stock data for this parent)
@@ -310,7 +330,7 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
             store_recs = []
             store_vels = []
             for store in grp["centro"].unique():
-                key = (parent, store)
+                key = (str(parent), str(store))
                 if key in store_action_map:
                     r = store_action_map[key]
                     step_val = _parse_pct_string(r.get("recommended_discount"))
@@ -354,58 +374,63 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
             weekly_profit_val = sim["weekly_profit"]
             action_type = sim["action_type"]
 
-        # 8. Per-store variance: fraction of stores whose *individual* rec differs
-        # from the channel choice. Stores without an action row implicitly recommend "hold"
-        # (current step). Used for the mandatory-review gate in the UI.
-        per_store_steps = []
+        # 8. Intra-channel variance: do the actioned stores within this channel
+        # AGREE with each other on the right step? Old definition compared each
+        # store's step to the channel's chosen step — but the channel sim is
+        # ungated relative to per-store, so it routinely chose deeper steps
+        # than per-store recommended, producing 99% "disagrees with channel."
+        # New definition: of the stores that the per-store classifier flagged,
+        # how many recommend a different step than the modal store-level step?
+        # Captures real intra-channel disagreement (override candidates).
+        actioned_steps = []
         for store in grp["centro"].unique():
-            key = (parent, store)
+            key = (str(parent), str(store))
             if key in store_action_map:
                 r = store_action_map[key]
-                per_store_steps.append(_parse_pct_string(r.get("recommended_discount")))
-            else:
-                # implicit hold at the store's current step
-                store_cur_disc = float(grp[grp["centro"] == store]["discount_rate"].iloc[0] or 0)
-                per_store_steps.append(snap_to_discount_step(store_cur_disc))
-        if per_store_steps:
-            diffs = sum(1 for s in per_store_steps if abs(s - chosen_step) > 1e-6)
-            variance_pct = diffs / len(per_store_steps)
+                actioned_steps.append(_parse_pct_string(r.get("recommended_discount")))
+        if len(actioned_steps) >= 2:
+            modal_step = Counter(actioned_steps).most_common(1)[0][0]
+            non_modal = sum(1 for s in actioned_steps if abs(s - modal_step) > 1e-6)
+            variance_pct = non_modal / len(actioned_steps)
         else:
+            # Single actioned store (or none) — no intra-channel disagreement possible
             variance_pct = 0.0
         mandatory_review = variance_pct > MANDATORY_REVIEW_VARIANCE
         if mandatory_review:
             n_mandatory += 1
 
-        # 9. Gap stats — compare chain-uniform profit to the sum of per-store optima.
-        # Apples-to-apples: recompute per-store expected velocity with
-        # expected_velocity_bidirectional (same function the chain sim uses),
-        # so the gap measures the uniform-price constraint cost, not a methodology
-        # difference between velocity formulas.
+        # 9. Gap stats — apples-to-apples: chain-uniform profit vs the sum of
+        # per-store profit-maximizing recommendations. Both sides run
+        # find_profit_maximizing_step on the SAME inputs (per-store
+        # velocity/stock/cost vs channel-aggregated velocity/stock/cost) so
+        # the gap genuinely measures the cost of the uniform-price constraint.
+        # Earlier version used the gated CSV recommendation, which compared
+        # ungated channel sim to gated per-store sim and produced systematic
+        # negative gaps (channel sim more aggressive than the gate allowed).
         chain_uniform_profit = float(weekly_profit_val) if weekly_profit_val is not None else 0.0
         sum_per_store_profit = 0.0
         for store in grp["centro"].unique():
-            key = (parent, store)
             store_row_feat = grp[grp["centro"] == store].iloc[0]
             store_vel = float(store_row_feat.get("velocity_4w", 0) or 0)
             store_cur_price = float(store_row_feat.get("avg_precio_final", channel_current_price) or 0)
             store_cur_disc = float(store_row_feat.get("discount_rate", 0) or 0)
-            if key in store_action_map:
-                r = store_action_map[key]
-                rec_price = float(r.get("recommended_price", store_cur_price) or 0)
-                store_rec_step = _parse_pct_string(r.get("recommended_discount"))
-            else:
-                rec_price = store_cur_price
-                store_rec_step = snap_to_discount_step(store_cur_disc)
-            # Recompute per-store expected velocity with the same function used
-            # at the chain level — keeps the gap comparison method-consistent.
-            exp_vel = expected_velocity_bidirectional(
-                store_vel, store_cur_disc, store_rec_step, elasticity,
+            if store_vel <= 0:
+                continue
+            store_sim = find_profit_maximizing_step(
+                list_price=list_price,
+                current_price=store_cur_price,
+                current_discount=store_cur_disc,
+                velocity=store_vel,
+                unit_cost=unit_cost,
+                elasticity=elasticity,
+                min_margin_pct=MIN_MARGIN_PCT,
+                min_price_delta=2000.0,
+                allow_increase=True,
             )
-            if unit_cost is not None and unit_cost > 0:
-                net = rec_price / (1 + IVA)
-                sum_per_store_profit += max(net - unit_cost, 0) * exp_vel
-            else:
-                sum_per_store_profit += rec_price * exp_vel
+            if store_sim is None:
+                # No feasible step for this store (cost/margin floor)
+                continue
+            sum_per_store_profit += float(store_sim["weekly_profit"])
         gap_abs = sum_per_store_profit - chain_uniform_profit
         gap_pct = (gap_abs / sum_per_store_profit * 100.0) if sum_per_store_profit > 0 else 0.0
         gap_stats.append({
@@ -423,9 +448,9 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
 
         # 10. Collect urgency, reasons, confidence from actioned stores in this channel
         channel_store_actions = [
-            store_action_map[(parent, s)]
+            store_action_map[(str(parent), str(s))]
             for s in grp["centro"].unique()
-            if (parent, s) in store_action_map
+            if (str(parent), str(s)) in store_action_map
         ]
         if channel_store_actions:
             severity = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "INCREASE": 2}
@@ -537,6 +562,7 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
         "n_channel_actions_written": int(n_written),
         "n_mandatory_review": int(n_mandatory),
         "n_no_feasible": int(n_no_feasible),
+        "n_skipped_no_classifier_signal": int(n_skipped_no_classifier_signal),
         "gap_pct_mean": round(float(gap_df["gap_pct"].mean()), 2) if not gap_df.empty else None,
         "gap_pct_median": round(float(gap_df["gap_pct"].median()), 2) if not gap_df.empty else None,
         "gap_pct_p75": round(float(gap_df["gap_pct"].quantile(0.75)), 2) if not gap_df.empty else None,
