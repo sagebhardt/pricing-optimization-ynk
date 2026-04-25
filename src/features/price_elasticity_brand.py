@@ -147,7 +147,7 @@ def prepare_elasticity_data(brand: str):
 
 
 def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
-                            markdown_dummy=True):
+                            markdown_dummy=False):
     """
     Estimate price elasticity per parent SKU using log-log OLS.
     Returns elasticity only when there's enough price variation.
@@ -155,14 +155,20 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
     Uses numpy arrays and np.linalg.lstsq directly (avoids pd.get_dummies
     and sklearn overhead per iteration — critical for 6K+ parent SKUs).
 
-    Markdown handling (markdown_dummy=True, default): when the data has an
-    `is_normal_price` column, an `is_markdown` (= 1 - is_normal_price) dummy
-    is added to the feature matrix INSTEAD of filtering. This separates the
-    price-elasticity coefficient (β on ln_price) from the markdown-event
-    demand boost (γ on is_markdown). Earlier filter-out approach (2026-04-25)
-    starved the regression of price variation — BOLD median elasticity went
-    to ~0 with 34% positive coefficients. Keeping all data + a dummy
-    preserves identification.
+    Markdown handling (DEFAULT OFF after 2026-04-25 retro):
+    - markdown_dummy=False (default): naive log-log fit on all data. Markdown
+      contamination biases |β| upward but estimates stay directionally
+      negative and informative — this is the original behavior from before
+      the elasticity-cleanup attempt.
+    - markdown_dummy=True: adds is_markdown to the feature matrix to absorb
+      the markdown event boost. Sounds principled but in real data ln_price
+      and is_markdown are near-perfect substitutes (markdown weeks ALWAYS
+      have lower prices since precio_normal only flags binary markdown vs
+      not, with no within-markdown price labelling). HOKA test run produced
+      median 0.0 with 50% POSITIVE elasticity and a min of −1294 — classic
+      OLS collinearity blow-up. Keep the param for future experimentation
+      with multi-tier markdown labels (e.g., 15%/20%/30%/40% indicators)
+      that DO have within-markdown variation.
     """
     results = []
     use_markdown_dummy = markdown_dummy and "is_normal_price" in data.columns

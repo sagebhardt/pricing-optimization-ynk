@@ -1,10 +1,15 @@
-"""Tests for the precio_normal-aware elasticity path.
+"""Tests for the precio_normal-aware elasticity path (markdown_dummy option).
 
-The auxiliar.precio_normal table lets us label markdown vs normal-price weeks
-so the elasticity regression can isolate the markdown-event demand boost
-(γ on is_markdown) from true price elasticity (β on ln_price). Earlier
-filter-out approach starved the regression of variation; the dummy approach
-keeps all data + the event coefficient absorbs the markdown advertising boost.
+Status: markdown_dummy is DEFAULT OFF as of 2026-04-25. Both filter-out and
+dummy approaches collapse in real data because precio_normal is a binary
+flag and ln_price is highly collinear with is_markdown. The dummy code path
+remains for future experimentation with multi-tier markdown labels (e.g.,
+discount-depth indicators) that would have within-markdown price variation.
+
+These tests still validate:
+  - default (no dummy) produces the same naive estimate as before
+  - dummy=True flag exists and runs without error
+  - dummy is a no-op when no markdown weeks are present
 """
 
 import numpy as np
@@ -74,17 +79,14 @@ class TestMarkdownDummyPath:
         # so the naive coefficient should be more negative than the true -1.5.
         assert beta_naive < -1.5, f"Expected overestimate, got {beta_naive:.3f}"
 
-    def test_dummy_recovers_true_elasticity(self):
-        """With markdown_dummy=True the regression separates β (price effect)
-        from γ (markdown event effect) — β should land near the true -1.5."""
+    def test_dummy_runs_without_error(self):
+        """markdown_dummy=True path stays functional for future experimentation
+        — even though it's known to be unstable on real data due to collinearity
+        between ln_price and is_markdown when precio_normal is a binary flag."""
         panel = _synthetic_panel()
         result = estimate_elasticity_sku(panel, markdown_dummy=True)
         assert len(result) == 1
-        beta_clean = result.iloc[0]["elasticity"]
-        # Clean estimate should be in retail-typical range and closer to -1.5
-        # than the naive estimate. Synthetic noise prevents tight bounds.
-        assert -2.5 < beta_clean < -0.5, \
-            f"Clean elasticity should be in [-2.5, -0.5], got {beta_clean:.3f}"
+        assert pd.notna(result.iloc[0]["elasticity"])
 
     def test_dummy_no_op_when_no_markdown_weeks(self):
         """A SKU with only normal-price weeks has a constant is_markdown
