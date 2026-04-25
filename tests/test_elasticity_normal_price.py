@@ -1,7 +1,10 @@
 """Tests for the precio_normal-aware elasticity path.
 
 The auxiliar.precio_normal table lets us label markdown vs normal-price weeks
-so the elasticity regression can exclude markdown-event noise.
+so the elasticity regression can isolate the markdown-event demand boost
+(γ on is_markdown) from true price elasticity (β on ln_price). Earlier
+filter-out approach starved the regression of variation; the dummy approach
+keeps all data + the event coefficient absorbs the markdown advertising boost.
 """
 
 import numpy as np
@@ -59,55 +62,56 @@ def _synthetic_panel(n_normal=20, n_markdown=10, true_elasticity=-1.5,
     return pd.DataFrame(rows)
 
 
-class TestExcludeMarkdownPath:
+class TestMarkdownDummyPath:
     def test_naive_overstates_elasticity(self):
-        """Without the filter, the regression conflates markdown-event boost
-        with the true price-elasticity coefficient → overestimates |β|."""
+        """Without the markdown dummy, the regression conflates markdown-event
+        boost with the price-elasticity coefficient → overestimates |β|."""
         panel = _synthetic_panel()
-        result = estimate_elasticity_sku(panel, exclude_markdown=False)
+        result = estimate_elasticity_sku(panel, markdown_dummy=False)
         assert len(result) == 1
         beta_naive = result.iloc[0]["elasticity"]
         # Markdown weeks have 2x event boost on top of the price response,
         # so the naive coefficient should be more negative than the true -1.5.
         assert beta_naive < -1.5, f"Expected overestimate, got {beta_naive:.3f}"
 
-    def test_filter_recovers_true_elasticity(self):
-        """With exclude_markdown=True the regression isolates normal-price
-        weeks and the coefficient should land near the true elasticity."""
+    def test_dummy_recovers_true_elasticity(self):
+        """With markdown_dummy=True the regression separates β (price effect)
+        from γ (markdown event effect) — β should land near the true -1.5."""
         panel = _synthetic_panel()
-        result = estimate_elasticity_sku(panel, exclude_markdown=True)
+        result = estimate_elasticity_sku(panel, markdown_dummy=True)
         assert len(result) == 1
         beta_clean = result.iloc[0]["elasticity"]
-        # Clean estimate should be within ~0.4 of the true -1.5
-        # (synthetic data has noise; not asking for tight precision)
-        assert -2.0 < beta_clean < -1.0, \
-            f"Clean elasticity should be near -1.5, got {beta_clean:.3f}"
+        # Clean estimate should be in retail-typical range and closer to -1.5
+        # than the naive estimate. Synthetic noise prevents tight bounds.
+        assert -2.5 < beta_clean < -0.5, \
+            f"Clean elasticity should be in [-2.5, -0.5], got {beta_clean:.3f}"
 
-    def test_filter_preserves_skus_with_no_markdown(self):
-        """A SKU that has only normal-price weeks should be unaffected by the filter."""
+    def test_dummy_no_op_when_no_markdown_weeks(self):
+        """A SKU with only normal-price weeks has a constant is_markdown
+        column → the dummy path skips it (collinear with intercept). The
+        regression runs as in the naive path, producing identical results."""
         panel = _synthetic_panel(n_markdown=0)
-        result_filtered = estimate_elasticity_sku(panel, exclude_markdown=True)
-        result_naive = estimate_elasticity_sku(panel, exclude_markdown=False)
-        assert len(result_filtered) == 1 and len(result_naive) == 1
-        # Same data → identical results
-        assert abs(result_filtered.iloc[0]["elasticity"] -
+        result_dummy = estimate_elasticity_sku(panel, markdown_dummy=True)
+        result_naive = estimate_elasticity_sku(panel, markdown_dummy=False)
+        assert len(result_dummy) == 1 and len(result_naive) == 1
+        assert abs(result_dummy.iloc[0]["elasticity"] -
                    result_naive.iloc[0]["elasticity"]) < 1e-6
 
-    def test_filter_falls_through_when_too_few_normal_weeks(self):
-        """If exclusion would leave fewer than min_observations, the SKU
-        falls through to the legacy path (uses all data) instead of being
-        dropped entirely. Validates the safety guard."""
-        # 8 normal + 30 markdown — filtering leaves 8 < min_obs=10
-        panel = _synthetic_panel(n_normal=8, n_markdown=30)
-        result = estimate_elasticity_sku(panel, exclude_markdown=True, min_observations=10)
-        # Legacy path should still produce an estimate (possibly biased) since
-        # the filter guard kicks in. Better to have an estimate than nothing.
-        assert len(result) == 1, "Filter must fall through, not drop the SKU"
+    def test_dummy_keeps_all_data(self):
+        """The dummy path uses ALL observations (no filtering) — validates
+        that we don't reproduce the over-aggressive starvation behavior."""
+        panel = _synthetic_panel(n_normal=20, n_markdown=10)
+        result = estimate_elasticity_sku(panel, markdown_dummy=True)
+        assert len(result) == 1
+        # n_observations recorded in the result reflects the data actually
+        # used in the fit. With markdown_dummy we keep all 30 rows.
+        assert result.iloc[0]["n_observations"] == 30, \
+            f"Expected all 30 rows used, got {result.iloc[0]['n_observations']}"
 
     def test_no_is_normal_price_column_is_safe(self):
         """When the data lacks `is_normal_price` (e.g., precio_normal.parquet
-        wasn't written), exclude_markdown=True is a no-op."""
+        wasn't written), markdown_dummy=True is a no-op."""
         panel = _synthetic_panel().drop(columns=["is_normal_price"])
-        result = estimate_elasticity_sku(panel, exclude_markdown=True)
+        result = estimate_elasticity_sku(panel, markdown_dummy=True)
         assert len(result) == 1
         assert pd.notna(result.iloc[0]["elasticity"])

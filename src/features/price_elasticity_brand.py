@@ -147,7 +147,7 @@ def prepare_elasticity_data(brand: str):
 
 
 def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
-                            exclude_markdown=True):
+                            markdown_dummy=True):
     """
     Estimate price elasticity per parent SKU using log-log OLS.
     Returns elasticity only when there's enough price variation.
@@ -155,14 +155,17 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
     Uses numpy arrays and np.linalg.lstsq directly (avoids pd.get_dummies
     and sklearn overhead per iteration — critical for 6K+ parent SKUs).
 
-    When exclude_markdown=True (default) and the data has an `is_normal_price`
-    column, markdown weeks are filtered before fitting. This isolates true
-    price elasticity from the markdown-event demand boost. SKUs that lose
-    all price variation after filtering get skipped (they fall through to
-    category-level elasticity).
+    Markdown handling (markdown_dummy=True, default): when the data has an
+    `is_normal_price` column, an `is_markdown` (= 1 - is_normal_price) dummy
+    is added to the feature matrix INSTEAD of filtering. This separates the
+    price-elasticity coefficient (β on ln_price) from the markdown-event
+    demand boost (γ on is_markdown). Earlier filter-out approach (2026-04-25)
+    starved the regression of price variation — BOLD median elasticity went
+    to ~0 with 34% positive coefficients. Keeping all data + a dummy
+    preserves identification.
     """
     results = []
-    use_normal_filter = exclude_markdown and "is_normal_price" in data.columns
+    use_markdown_dummy = markdown_dummy and "is_normal_price" in data.columns
 
     # Pre-compute global month codes for one-hot encoding
     unique_months = np.sort(data["month"].unique())
@@ -173,14 +176,6 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
         if len(group) < min_observations:
             continue
 
-        if use_normal_filter:
-            normal_group = group[group["is_normal_price"]]
-            # Only filter when the SKU still has enough observations after
-            # excluding markdown weeks. Otherwise fall through to the legacy
-            # path so we don't lose the SKU entirely.
-            if len(normal_group) >= min_observations:
-                group = normal_group
-
         # Check price variation (coefficient of variation)
         price_cv = group["avg_price"].std() / group["avg_price"].mean()
         if price_cv < min_price_variation:
@@ -190,6 +185,15 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
 
         # Build feature matrix with numpy (no pd.get_dummies / pd.concat)
         features = [group["ln_price"].values.reshape(-1, 1)]
+
+        # Markdown dummy: 1 = price < precio_normal × 0.95 (markdown event).
+        # Only added when both states are present in the group — otherwise
+        # the column is constant and would be perfectly collinear with the
+        # intercept.
+        if use_markdown_dummy:
+            is_markdown_arr = (~group["is_normal_price"].astype(bool)).values.astype(np.float64)
+            if 0 < is_markdown_arr.sum() < n:
+                features.append(is_markdown_arr.reshape(-1, 1))
 
         # Month dummies (one-hot, drop first)
         g_months = group["month"].values
