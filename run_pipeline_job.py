@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 BRANDS = os.getenv("PIPELINE_BRANDS", "HOKA,BOLD,BAMERS,OAKLEY,BELSPORT").split(",")
-STEPS = os.getenv("PIPELINE_STEPS", "extract,scrape_competitors,elasticity,features,lifecycle,size_curve,enhance,aggregate,cross_store,train,pricing,outcome,sync").split(",")
+STEPS = os.getenv("PIPELINE_STEPS", "extract,scrape_competitors,elasticity,features,lifecycle,size_curve,enhance,aggregate,cross_store,train,pricing,channel_aggregate,competitive_intel,outcome,sync").split(",")
 
 
 def run():
