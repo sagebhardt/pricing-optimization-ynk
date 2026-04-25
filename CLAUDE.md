@@ -98,7 +98,7 @@ API (Cloud Run, slim image ~50MB):
 - **Cloud Scheduler**: `pricing-pipeline-weekly` (Monday 09:00 UTC / 6am CLT)
 - **Cloud Scheduler**: `competitor-scrape-midweek` (Wednesday 09:00 CLT) — competitor scraping + intelligence brief
 - **GCS Bucket**: `gs://ynk-pricing-decisions`
-- **DB**: PostgreSQL at `190.54.179.91` (public) / `192.168.18.150` (office). Database name: `dwh`. Primary schema: `sap_s4`. Migrated 2026-04-25 from legacy `consultas` / `datawarehouse`.
+- **DB**: PostgreSQL at `190.54.179.91` (public) / `192.168.18.150` (office). **Two databases on the same instance**: `consultas` (YNK Tableau-fed `ventas.*` + legacy `ti.productos` cost fallback) and `dwh` (SAP master data in `sap_s4.*` + YNK custom data in `auxiliar.*` + marketplace/multivende/sap_commerce). `extract_brand.py` opens both: `get_connection()` → consultas, `get_dw_connection()` → dwh. Cloud Run env vars: `YNK_DB_NAME=consultas`, dwh side falls through to `DW_DB_CONFIG` defaults (or set `YNK_DW_DB_NAME=dwh` explicitly). Migrated 2026-04-25 from the legacy single-DB / `datawarehouse` schema.
 - **GCP Project**: `ynk-pricing-optimization`
 - **Estimated cost**: ~$9/month total (API ~$5 with min-instances=0, pipeline ~$3, GCS negligible)
 
@@ -178,7 +178,7 @@ PostgreSQL `dwh` database, 13 schemas. Primary source is `sap_s4`. Other populat
 Empty (provisioned but no data yet): `google`, `pos`, `public`, `reports`, `salesforce`, `sap_ewm`, `wholesale`, `woocommerce`.
 
 Untapped tables that would meaningfully improve the model (not yet integrated):
-- `auxiliar.precio_normal` — reference price per parent SKU. Solves the "elasticity conflated with markdown" issue by labeling each transaction as normal vs. discounted.
+- `auxiliar.precio_normal` — reference price per parent SKU. Currently extracted to `data/raw/{brand}/precio_normal.parquet` and used to flag markdown weeks (`is_normal_price` on the elasticity panel). Both filter-out and binary-dummy elasticity cleanup attempts (2026-04-25) failed empirically: a binary markdown flag is collinear with `ln_price` (markdown weeks always have lower prices), so OLS blows up. To actually clean elasticity we need multi-tier markdown labels (e.g., 15%/20%/30%/40% indicators) that have within-markdown price variation. Infra is in place (`markdown_dummy` parameter on `estimate_elasticity_sku`, default OFF) — ready to test with richer labels once available.
 - `auxiliar.rebates` — supplier rebate contributions during markdown events. True margin = cost − rebate; current floor calculations are conservative.
 - `auxiliar.flujo_tiendas` — hourly foot traffic (we use weekly_entries, much coarser).
 - `auxiliar.producto_atributos_custom_join` — YNK merchandising tags (ranking, lifecycle, collection).
@@ -375,7 +375,7 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - C&C columns (`click_collect_units`, `instore_units`, `instore_velocity_4w`, `click_collect_ratio`) excluded from model training (in `EXCLUDE_COLS` in both `train_brand.py` and `weekly_pricing_brand.py`)
 
 ## Known Issues
-- Elasticity estimates conflated with markdown effects — `auxiliar.precio_normal` is now available in `dwh`; integrate into `price_elasticity_brand.py` to exclude markdown weeks from the regression
+- Elasticity estimates conflated with markdown effects — production keeps the original "include all data, accept upward bias" methodology. The 2026-04-25 cleanup experiment (filter-out, then binary dummy) failed because `auxiliar.precio_normal` only labels markdown vs not without depth granularity, so `ln_price` is collinear with `is_markdown` and OLS produces unstable coefficients (HOKA went to median 0 with 50% positive; BOLD min −1294, max +21). Real fix needs multi-tier discount-depth labels (15/20/30/40% indicators) that have within-markdown price variation. The `markdown_dummy` parameter on `estimate_elasticity_sku` stays in code (default OFF) so we can rerun the experiment once richer labels are wired through `prepare_elasticity_data`.
 - Belsport has no stock table yet (`stock_belsport` doesn't exist) — uses sales proxy for size curve
 - BELSPORT regressor R2 (CV=0.538) improved significantly but holdout (0.704) suggests more room
 - Size curve alerts filtered to latest week only (BELSPORT was generating 3.4M rows across all weeks)
