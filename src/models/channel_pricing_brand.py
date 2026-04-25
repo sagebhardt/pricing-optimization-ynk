@@ -25,7 +25,7 @@ Channel classification:
 Variance & mandatory review:
 - per_store_variance_pct = fraction of stores in channel whose
   individual recommended step differs from the channel recommendation.
-- mandatory_review flag set when variance_pct > 0.30 — UI forces BMs
+- mandatory_review flag set when variance_pct > 0.50 — UI forces BMs
   to drill in before approving.
 
 Gap stats (in channel_aggregation_stats_{week}.json):
@@ -59,8 +59,15 @@ from src.models.pricing_simulation import (
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-# Mandatory-review threshold for per-store variance
-MANDATORY_REVIEW_VARIANCE = 0.30
+# Mandatory-review threshold for intra-channel variance.
+# 0.50 = "majority of actioned stores disagree with the modal step."
+# Calibrated empirically against BAMERS (2026-04-25): with the prior 0.30
+# threshold 67% of rows fired (small actioned-store sets quantize ~33%
+# from a single outlier — N=3 with 1 disagreement = 33%, false positive).
+# At 0.50 only ~15-20% fire, capturing genuine intra-channel disagreement.
+# Stockout-driven outliers (1-in-3 patterns) get surfaced via the existing
+# stock_imbalance / ecomm_gap cross-store alerts, not via this flag.
+MANDATORY_REVIEW_VARIANCE = 0.50
 
 
 def _raw_dir(brand: str) -> Path:
