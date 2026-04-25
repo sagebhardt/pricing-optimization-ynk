@@ -25,7 +25,7 @@ def get_connection():
 
 
 def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
-    """Pull per-parent CLP cost from datawarehouse.costo.
+    """Pull per-parent CLP cost from sap_s4.costo.
 
     Costs live at child (sized) SKU level. For each parent: take the latest cost
     per (producto_id, centro_id) within lookback_days, then average across
@@ -42,14 +42,14 @@ def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
         query = f"""
             WITH brand_children AS (
                 SELECT producto_id, sku_padre_sap
-                FROM datawarehouse.producto
+                FROM sap_s4.producto
                 WHERE sku_padre_sap IN ({placeholders})
                   AND sku_padre_sap IS NOT NULL
             ),
             latest_cost AS (
                 SELECT DISTINCT ON (c.producto_id, c.centro_id)
                        c.producto_id, c.centro_id, c.costo
-                FROM datawarehouse.costo c
+                FROM sap_s4.costo c
                 JOIN brand_children bc ON c.producto_id = bc.producto_id
                 WHERE c.fecha >= CURRENT_DATE - INTERVAL '{int(lookback_days)} days'
                   AND c.costo > 0
@@ -71,7 +71,7 @@ def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
                 print(f"  datawarehouse: {len(thin)} parents have <30% child coverage (may be stale)")
         return df[["sku", "cost"]]
     except Exception as e:
-        print(f"  datawarehouse.costo extraction skipped: {e}")
+        print(f"  sap_s4.costo extraction skipped: {e}")
         return None
     finally:
         if conn is not None:
@@ -80,7 +80,7 @@ def _extract_costs_from_dw(parent_skus, lookback_days: int = 90):
 
 
 def _extract_official_prices_from_dw(parent_skus):
-    """Pull per-parent list price from datawarehouse.producto_precio_padre.
+    """Pull per-parent list price from sap_s4.producto_precio_padre.
 
     Each parent can have multiple rows across price lists (retail, outlet,
     virtual, eventos, liquidación, etc.). We take the MAX of `precio_normal`
@@ -97,7 +97,7 @@ def _extract_official_prices_from_dw(parent_skus):
         query = f"""
             SELECT sku_padre_sap AS sku,
                    MAX(precio_normal) AS list_price
-            FROM datawarehouse.producto_precio_padre
+            FROM sap_s4.producto_precio_padre
             WHERE sku_padre_sap IN ({placeholders})
               AND precio_normal > 0
               AND fecha_inicio_validez <= CURRENT_DATE
@@ -106,7 +106,7 @@ def _extract_official_prices_from_dw(parent_skus):
         """
         return pd.read_sql(query, conn, params=tuple(parent_skus))
     except Exception as e:
-        print(f"  datawarehouse.producto_precio_padre extraction skipped: {e}")
+        print(f"  sap_s4.producto_precio_padre extraction skipped: {e}")
         return None
     finally:
         if conn is not None:
@@ -115,14 +115,14 @@ def _extract_official_prices_from_dw(parent_skus):
 
 
 def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
-    """Pull per-SKU per-store daily stock from datawarehouse.stock.
+    """Pull per-SKU per-store daily stock from sap_s4.stock.
 
     Output schema matches the legacy `public.stock_{brand}` tables that
     downstream code (size_curve, build_features_brand) consumes:
       fecha, store_id, sku, stock_on_hand_units, stock_in_transit_units,
       total_stock_position_units.
 
-    `banner_ids` is a list of datawarehouse.venta_organizacion_id values
+    `banner_ids` is a list of sap_s4.venta_organizacion_id values
     (e.g., [1, 4] for Belsport + Belsport Kids) to scope stock to the brand's
     own stores. Returns a DataFrame or None on error.
     """
@@ -141,9 +141,9 @@ def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
                 COALESCE(s.stock, 0) AS stock_on_hand_units,
                 COALESCE(s.stock_transito, 0) AS stock_in_transit_units,
                 (COALESCE(s.stock, 0) + COALESCE(s.stock_transito, 0)) AS total_stock_position_units
-            FROM datawarehouse.stock s
-            JOIN datawarehouse.producto p ON s.producto_id = p.producto_id
-            JOIN datawarehouse.centro ctr ON s.centro_id = ctr.centro_id
+            FROM sap_s4.stock s
+            JOIN sap_s4.producto p ON s.producto_id = p.producto_id
+            JOIN sap_s4.centro ctr ON s.centro_id = ctr.centro_id
             WHERE ctr.venta_organizacion_id IN ({banner_placeholders})
               AND s.fecha >= CURRENT_DATE - INTERVAL '{int(lookback_weeks)} weeks'
               AND p.sku_padre_sap IN ({sku_placeholders})
@@ -153,7 +153,7 @@ def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
         df["fecha"] = pd.to_datetime(df["fecha"])
         return df
     except Exception as e:
-        print(f"  datawarehouse.stock extraction skipped: {e}")
+        print(f"  sap_s4.stock extraction skipped: {e}")
         return None
     finally:
         if conn is not None:
@@ -164,7 +164,7 @@ def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
 def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
     """Pull folio → lista_precio.descripcion mapping from DW for given banners.
 
-    Uses `datawarehouse.view_ventas` (a populated materialized view indexed on fecha)
+    Uses `sap_s4.view_ventas` (a populated materialized view indexed on fecha)
     joined to `factura_cabecera` via doc_facturacion (indexed) and `lista_precio`.
     Returns DataFrame with columns [folio, centro, list_name, list_category] or None.
 
@@ -185,9 +185,9 @@ def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
                 COALESCE(NULLIF(SPLIT_PART(vv.folio_sii, '-', 2), ''), vv.folio_sii) AS folio,
                 vv.tienda_codigo_sap AS centro,
                 lp.descripcion AS list_name
-            FROM datawarehouse.view_ventas vv
-            JOIN datawarehouse.factura_cabecera fc ON vv.doc_facturacion = fc.doc_facturacion
-            JOIN datawarehouse.lista_precio lp ON fc.lista_precio_id = lp.lista_precio_id
+            FROM sap_s4.view_ventas vv
+            JOIN sap_s4.factura_cabecera fc ON vv.doc_facturacion = fc.doc_facturacion
+            JOIN sap_s4.lista_precio lp ON fc.lista_precio_id = lp.lista_precio_id
             WHERE vv.fecha >= CURRENT_DATE - INTERVAL '{int(lookback_years)} years'
               AND vv.organizacion_ventas_nombre IN ({placeholders})
               AND vv.folio_sii IS NOT NULL
@@ -208,7 +208,7 @@ def _extract_list_names_from_dw(banner_names, lookback_years: int = 3):
 def _extract_backorder_from_dw(parent_skus, banner_names, lookback_months: int = 12):
     """Pull open purchase-order units per (sku, centro) from DW.
 
-    Uses `datawarehouse.view_ordenes_compra_detalle` (PO lines) LEFT JOINed to
+    Uses `sap_s4.view_ordenes_compra_detalle` (PO lines) LEFT JOINed to
     aggregated `view_recepcion_orden_compra_resumen` (receipts), both keyed by
     (oc_numero, sku_sap). Computes (ordered - received) > 0 as the open/backorder
     quantity; status column values aren't inspected, so this stays robust to
@@ -228,8 +228,8 @@ def _extract_backorder_from_dw(parent_skus, banner_names, lookback_months: int =
             WITH po_detail AS (
                 SELECT vo.oc_numero, vo.tienda_codigo_sap, vo.sku_sap,
                        vo.cantidad, vo.fecha_entrega, p.sku_padre_sap
-                FROM datawarehouse.view_ordenes_compra_detalle vo
-                JOIN datawarehouse.producto p ON vo.sku_sap = p.sku_sap
+                FROM sap_s4.view_ordenes_compra_detalle vo
+                JOIN sap_s4.producto p ON vo.sku_sap = p.sku_sap
                 WHERE vo.banner IN ({ban_ph})
                   AND vo.fecha_creacion >= CURRENT_DATE - INTERVAL '{int(lookback_months)} months'
                   AND p.sku_padre_sap IN ({sku_ph})
@@ -237,7 +237,7 @@ def _extract_backorder_from_dw(parent_skus, banner_names, lookback_months: int =
             received AS (
                 SELECT vr.oc_numero, vr.sku_sap,
                        SUM(vr.cantidad_recibida) AS received_qty
-                FROM datawarehouse.view_recepcion_orden_compra_resumen vr
+                FROM sap_s4.view_recepcion_orden_compra_resumen vr
                 WHERE vr.oc_numero IN (SELECT DISTINCT oc_numero FROM po_detail)
                 GROUP BY vr.oc_numero, vr.sku_sap
             )
@@ -289,12 +289,12 @@ def _extract_replenishment_from_dw(parent_skus, banner_names, lookback_weeks: in
                        tc.fecha_creacion,
                        tc.fecha_recepcion,
                        td.unidades
-                FROM datawarehouse.traspaso_detalle td
-                JOIN datawarehouse.traspaso_cabecera tc
+                FROM sap_s4.traspaso_detalle td
+                JOIN sap_s4.traspaso_cabecera tc
                      ON td.traspaso_cabecera_id = tc.traspaso_cabecera_id
-                JOIN datawarehouse.producto p ON td.producto_id = p.producto_id
-                JOIN datawarehouse.centro ctr ON td.centro_destino_id = ctr.centro_id
-                JOIN datawarehouse.venta_organizacion vo
+                JOIN sap_s4.producto p ON td.producto_id = p.producto_id
+                JOIN sap_s4.centro ctr ON td.centro_destino_id = ctr.centro_id
+                JOIN sap_s4.venta_organizacion vo
                      ON ctr.venta_organizacion_id = vo.venta_organizacion_id
                 WHERE p.sku_padre_sap IN ({sku_ph})
                   AND vo.organizacion_ventas_nombre IN ({ban_ph})
@@ -312,8 +312,8 @@ def _extract_replenishment_from_dw(parent_skus, banner_names, lookback_weeks: in
                        AS avg_transit_days,
                    COUNT(*) AS n_transfers
             FROM brand_transfers bt
-            JOIN datawarehouse.producto p ON bt.producto_id = p.producto_id
-            JOIN datawarehouse.centro ctr ON bt.centro_destino_id = ctr.centro_id
+            JOIN sap_s4.producto p ON bt.producto_id = p.producto_id
+            JOIN sap_s4.centro ctr ON bt.centro_destino_id = ctr.centro_id
             GROUP BY p.sku_padre_sap, p.sku_sap, ctr.tienda_codigo_sap
             -- Keep groups where EITHER bucket has net-positive units. A pair can have
             -- non-zero in-transit even if received-minus-reversals nets to zero overall.
@@ -493,7 +493,7 @@ def extract_brand(brand_name: str):
             conn.rollback()
     elif dw_banners:
         parents_for_stock = list(products["codigo_padre"].dropna().unique())
-        print(f"Extracting stock from datawarehouse.stock (banners={dw_banners})...")
+        print(f"Extracting stock from sap_s4.stock (banners={dw_banners})...")
         dw_stock = _extract_stock_from_dw(parents_for_stock, dw_banners)
         if dw_stock is not None and len(dw_stock) > 0:
             stock = dw_stock
@@ -502,7 +502,7 @@ def extract_brand(brand_name: str):
                   f"{stock['fecha'].min().date()}→{stock['fecha'].max().date()}, "
                   f"stores={stock['store_id'].nunique()}")
         else:
-            print("  datawarehouse.stock returned no rows")
+            print("  sap_s4.stock returned no rows")
     else:
         print(f"No stock table configured for {brand_name} — skipping")
 
@@ -536,7 +536,7 @@ def extract_brand(brand_name: str):
     parent_skus = list(products["codigo_padre"].dropna().unique())
 
     # 9. Generate costs.parquet if not already present (from GCS or local).
-    # Source order: datawarehouse.costo (authoritative, CLP) → ti.productos (legacy, USD/CLP heuristic).
+    # Source order: sap_s4.costo (authoritative, CLP) → ti.productos (legacy, USD/CLP heuristic).
     costs_path = raw_dir / "costs.parquet"
     if not costs_path.exists() and parent_skus:
         dw_df = _extract_costs_from_dw(parent_skus)
@@ -563,7 +563,7 @@ def extract_brand(brand_name: str):
             print(f"  Generated official_prices.parquet: {len(op_df):,} / {len(parent_skus):,} parents "
                   f"({pct:.0f}% coverage from datawarehouse)")
 
-    # 11. Backorder signal — open PO units per (sku, centro) from datawarehouse.
+    # 11. Backorder signal — open PO units per (sku, centro) from sap_s4.
     # Net-new feature: enables pricing to see incoming supply when stock is low.
     dw_banners_names = DW_BRAND_BANNERS.get(brand_name)
     if parent_skus and dw_banners_names:

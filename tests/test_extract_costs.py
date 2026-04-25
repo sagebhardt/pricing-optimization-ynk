@@ -23,8 +23,8 @@ class TestExtractCostsFromDw:
             out = eb._extract_costs_from_dw(["HKABC", "HKDEF"])
         assert read_sql.called
         query, _ = read_sql.call_args[0]
-        assert "datawarehouse.costo" in query
-        assert "datawarehouse.producto" in query
+        assert "sap_s4.costo" in query
+        assert "sap_s4.producto" in query
         assert list(out.columns) == ["sku", "cost"]
         assert list(out["cost"]) == [42000, 58000]
 
@@ -88,7 +88,7 @@ class TestExtractOfficialPricesFromDw:
             out = eb._extract_official_prices_from_dw(["HKABC", "HKDEF"])
         assert read_sql.called
         query, _ = read_sql.call_args[0]
-        assert "datawarehouse.producto_precio_padre" in query
+        assert "sap_s4.producto_precio_padre" in query
         assert "MAX(precio_normal)" in query
         assert "fecha_inicio_validez <= CURRENT_DATE" in query
         assert "fecha_fin_validez" in query  # guard: validity-window filter must stay
@@ -119,9 +119,9 @@ class TestExtractStockFromDw:
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_stock_from_dw(["NI1234"], [1, 4])
         query, _ = read_sql.call_args[0]
-        assert "datawarehouse.stock" in query
-        assert "datawarehouse.producto" in query
-        assert "datawarehouse.centro" in query
+        assert "sap_s4.stock" in query
+        assert "sap_s4.producto" in query
+        assert "sap_s4.centro" in query
         assert "venta_organizacion_id" in query
         assert "16 weeks" in query  # default lookback
         # params should be banner_ids first, then parent_skus
@@ -150,9 +150,9 @@ class TestExtractListNamesFromDw:
              patch("src.data.extract_brand.pd.read_sql", return_value=raw) as read_sql:
             out = eb._extract_list_names_from_dw(["Hoka"])
         query, _ = read_sql.call_args[0]
-        assert "datawarehouse.view_ventas" in query
-        assert "datawarehouse.factura_cabecera" in query
-        assert "datawarehouse.lista_precio" in query
+        assert "sap_s4.view_ventas" in query
+        assert "sap_s4.factura_cabecera" in query
+        assert "sap_s4.lista_precio" in query
         assert "doc_facturacion" in query
         assert "folio_sii" in query
         # Register-code prefix (e.g. "039-") must be stripped so the join key

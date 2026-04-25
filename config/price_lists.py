@@ -1,6 +1,6 @@
-"""Classifier for datawarehouse.lista_precio.descripcion → market bucket.
+"""Classifier for sap_s4.lista_precio.descripcion → market bucket.
 
-SAP-backed `datawarehouse.lista_precio` has 55 named price lists across brands
+SAP-backed `sap_s4.lista_precio` has 55 named price lists across brands
 (e.g., "Hoka tiendas", "Liquidación Bold", "Outlet la fabrica", "Bamers Virtual",
 "Bamers Eventos"). Each invoice in `factura_cabecera` references one list, so
 the list name is the cleanest available signal for whether a sale happened under
