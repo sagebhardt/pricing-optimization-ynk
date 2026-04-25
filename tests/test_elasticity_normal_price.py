@@ -117,3 +117,63 @@ class TestMarkdownDummyPath:
         result = estimate_elasticity_sku(panel, markdown_dummy=True)
         assert len(result) == 1
         assert pd.notna(result.iloc[0]["elasticity"])
+
+
+class TestMultiTierMarkdown:
+    """When the panel has md_tier_15/20/30/40 columns, the multi-tier path
+    is preferred over the binary one. Within-tier price variation breaks
+    the collinearity that killed the binary attempt."""
+
+    def _multi_tier_panel(self, true_elasticity=-1.5):
+        """Synthetic panel with multiple discount tiers + within-tier price
+        variation (cross-store noise) so β is identifiable."""
+        import numpy as np
+        rng = np.random.default_rng(7)
+        rows = []
+        list_price = 100_000
+
+        def _row(price, w, tier_15, tier_20, tier_30, tier_40, event_boost):
+            units = price ** true_elasticity * (list_price ** (-true_elasticity)) * 100
+            units = max(1, int(units * event_boost * rng.uniform(0.92, 1.08)))
+            rows.append({
+                "codigo_padre": "P1", "sku": "P1_01", "centro": "S1",
+                "week": pd.Timestamp("2026-01-01") + pd.Timedelta(weeks=w),
+                "avg_price": price, "avg_list_price": list_price,
+                "units": units,
+                "ln_price": np.log(price), "ln_units": np.log(units),
+                "month": (w % 12) + 1, "week_num": w,
+                "primera_jerarquia": "Footwear", "segunda_jerarquia": "Running",
+                "is_normal_price": (tier_15 + tier_20 + tier_30 + tier_40) == 0,
+                "md_tier_15": tier_15, "md_tier_20": tier_20,
+                "md_tier_30": tier_30, "md_tier_40": tier_40,
+                "discount_depth": 1 - price / list_price,
+            })
+        # 15 normal weeks (price ~ list, 8% spread)
+        for w in range(15):
+            _row(list_price * rng.uniform(0.95, 1.03), w, 0, 0, 0, 0, 1.0)
+        # 8 weeks at tier_15 (12-17% off), event boost 1.4x
+        for w in range(15, 23):
+            _row(list_price * rng.uniform(0.83, 0.88), w, 1, 0, 0, 0, 1.4)
+        # 5 weeks at tier_30 (25-32% off), event boost 1.8x
+        for w in range(23, 28):
+            _row(list_price * rng.uniform(0.68, 0.75), w, 0, 0, 1, 0, 1.8)
+        return pd.DataFrame(rows)
+
+    def test_multi_tier_recovers_true_elasticity(self):
+        """Multi-tier dummies isolate the price-elasticity coefficient from
+        the per-tier event boosts. β should land near the synthetic -1.5."""
+        panel = self._multi_tier_panel(true_elasticity=-1.5)
+        result = estimate_elasticity_sku(panel, markdown_dummy=True)
+        assert len(result) == 1
+        beta = result.iloc[0]["elasticity"]
+        # Expected near -1.5; allow a wide band since synthetic noise is real
+        assert -2.5 < beta < -0.5, f"Multi-tier β should be in [-2.5, -0.5], got {beta:.3f}"
+
+    def test_naive_overstates_with_multi_tier_data(self):
+        """On the same multi-tier panel, no-dummy fit should overstate |β|
+        because event boosts are conflated with the price coefficient."""
+        panel = self._multi_tier_panel(true_elasticity=-1.5)
+        result = estimate_elasticity_sku(panel, markdown_dummy=False)
+        assert len(result) == 1
+        beta_naive = result.iloc[0]["elasticity"]
+        assert beta_naive < -1.5, f"Naive β should be more negative than -1.5, got {beta_naive:.3f}"

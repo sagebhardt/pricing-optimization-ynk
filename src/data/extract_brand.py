@@ -166,6 +166,57 @@ def _extract_precio_normal_from_dw(parent_skus):
             except Exception: pass
 
 
+def _extract_rebates_from_dw(brand_name, lookback_days: int = 30, lookahead_days: int = 60):
+    """Pull supplier rebates from auxiliar.rebates for the brand.
+
+    Each row is a per-unit supplier contribution during a specific event
+    (e.g., "LIQUIDACION FIN TEMPORADA") with a date range and a banner scope
+    (specific banner or "TODOS"). When the rebate window is active, the
+    effective cost for that parent SKU is `unit_cost - aporte_unitario`,
+    letting the cost floor relax and exposing deeper markdowns that still
+    produce healthy margin.
+
+    Pulls events that overlap the [now − lookback_days, now + lookahead_days]
+    window so the pricing step can pick up just-ended events (for backtest
+    consistency) and upcoming events (for forward-looking pricing).
+
+    Returns DataFrame with columns
+    ['parent_sku', 'fecha_inicio', 'fecha_termino', 'aporte_unitario',
+     'banner', 'canal', 'concepto']
+    or None on error / empty result.
+    """
+    conn = None
+    try:
+        conn = get_dw_connection()
+        query = """
+            SELECT cod_padre AS parent_sku,
+                   fecha_inicio,
+                   fecha_termino,
+                   aporte_unitario,
+                   banner,
+                   canal,
+                   concepto
+            FROM auxiliar.rebates
+            WHERE (UPPER(banner) = %s OR UPPER(banner) = 'TODOS')
+              AND aporte_unitario > 0
+              AND fecha_termino >= CURRENT_DATE - INTERVAL %s
+              AND fecha_inicio  <= CURRENT_DATE + INTERVAL %s
+        """
+        df = pd.read_sql(query, conn, params=(
+            brand_name.upper(),
+            f"{int(lookback_days)} days",
+            f"{int(lookahead_days)} days",
+        ))
+        return df if len(df) > 0 else None
+    except Exception as e:
+        print(f"  auxiliar.rebates extraction skipped: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try: conn.close()
+            except Exception: pass
+
+
 def _extract_stock_from_dw(parent_skus, banner_ids, lookback_weeks: int = 16):
     """Pull per-SKU per-store daily stock from sap_s4.stock.
 
@@ -626,6 +677,19 @@ def extract_brand(brand_name: str):
             pct = 100 * len(pn_df) / len(parent_skus)
             print(f"  Generated precio_normal.parquet: {len(pn_df):,} / {len(parent_skus):,} parents "
                   f"({pct:.0f}% coverage from auxiliar.precio_normal)")
+
+    # 10c. Active supplier rebates from auxiliar.rebates — used by the pricing
+    # step to relax the cost floor when a rebate event covers the markdown.
+    rb_df = _extract_rebates_from_dw(brand_name)
+    if rb_df is not None and len(rb_df) > 0:
+        rb_df.to_parquet(raw_dir / "rebates.parquet", index=False)
+        active = (
+            (rb_df["fecha_inicio"] <= pd.Timestamp.today().normalize()) &
+            (rb_df["fecha_termino"] >= pd.Timestamp.today().normalize())
+        ).sum()
+        n_parents = rb_df["parent_sku"].nunique()
+        print(f"  Generated rebates.parquet: {len(rb_df):,} events covering "
+              f"{n_parents:,} parents ({active:,} active today)")
 
     # 11. Backorder signal — open PO units per (sku, centro) from sap_s4.
     # Net-new feature: enables pricing to see incoming supply when stock is low.

@@ -1710,6 +1710,58 @@ function App() {
         </div>
       )}
 
+      {grain === 'channel' && crossStoreAlerts.length > 0 && (
+        <section className="section section--cross-store section--cross-store-elevated">
+          <div className="section-header">
+            <AlertTriangle size={16} />
+            <h2>Inconsistencias entre tiendas — candidatos a override ({crossStoreAlerts.length})</h2>
+          </div>
+          <div className="alert-grid">
+            {crossStoreAlerts.slice(0, 20).map((a, i) => (
+              <div key={i} className="alert-card alert-card--cross-store">
+                <div className="alert-sku">{a.parent_sku}</div>
+                <div className="alert-spread">{(a.price_spread * 100).toFixed(0)}% spread</div>
+                <div className="alert-stores">
+                  {a.stores.map((s, j) => (
+                    <button
+                      key={j}
+                      className={`cs-store cs-store--btn ${s.channel}`}
+                      onClick={() => {
+                        // Find the per-store action row to open in the manual modal —
+                        // override goes to the per-store decisions namespace.
+                        const storeAction = {
+                          parent_sku: a.parent_sku,
+                          store: s.store,
+                          store_name: s.store,
+                          product: a.parent_sku,
+                          current_list_price: s.price,
+                          current_price: s.price,
+                          current_velocity: 1,
+                          recommended_price: a.sync_price || s.price,
+                        }
+                        // Override = per-store grain, regardless of current view grain
+                        if (grain === 'channel') toggleGrain('store')
+                        setManualAction(storeAction)
+                      }}
+                      title="Click para override de esta tienda"
+                    >
+                      {s.store}: ${s.price?.toLocaleString()}
+                      {s.discount_rate > 0.05 ? ` (-${(s.discount_rate * 100).toFixed(0)}%)` : ''}
+                    </button>
+                  ))}
+                </div>
+                {a.sync_price && <div className="alert-sync">Sync: ${a.sync_price.toLocaleString()}</div>}
+                <div className="alert-reasons-list">
+                  {a.alert_reasons.split(';').filter(Boolean).map((r, j) => (
+                    <span key={j} className="reason-badge">{r.replace(/_/g, ' ')}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {grain === 'channel' ? (
         <ChannelListaView
           actions={actions}
@@ -1852,7 +1904,7 @@ function App() {
         </section>
       )}
 
-      {crossStoreAlerts.length > 0 && (
+      {grain !== 'channel' && crossStoreAlerts.length > 0 && (
         <section className="section section--cross-store">
           <div className="section-header"><AlertTriangle size={16} /><h2>Inconsistencias de precio entre tiendas ({crossStoreAlerts.length})</h2></div>
           <div className="alert-grid">

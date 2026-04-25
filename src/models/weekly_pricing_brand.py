@@ -328,6 +328,29 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
                 return cost_map[k]
         return None
 
+    # Supplier rebates — when an event window covers the target week, the
+    # effective cost drops by aporte_unitario per unit. The pricing engine
+    # uses effective cost for the floor + margin math, so a rebate-funded
+    # event genuinely allows a deeper markdown without breaking the floor.
+    rebate_map = {}  # parent_sku → aporte_unitario (CLP)
+    rebates_path = raw / "rebates.parquet"
+    if rebates_path.exists():
+        rb = pd.read_parquet(rebates_path)
+        rb["fecha_inicio"] = pd.to_datetime(rb["fecha_inicio"])
+        rb["fecha_termino"] = pd.to_datetime(rb["fecha_termino"])
+        # Will be re-filtered below once target_week is known.
+        rebates_all = rb
+    else:
+        rebates_all = None
+
+    def _effective_cost(sku):
+        """Cost net of any active supplier rebate. Falls through to raw cost."""
+        c = _get_cost(sku)
+        if c is None:
+            return None
+        rebate = rebate_map.get(sku, 0)
+        return max(c - rebate, 0)
+
     # Determine target week — use most recent week with sufficient data
     if target_week is None:
         # Count rows per week, pick latest with >= 10 parent-store rows
@@ -341,6 +364,25 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         target_week = pd.Timestamp(target_week)
 
     print(f"[{brand}] Generating weekly pricing actions for: {target_week.date()}")
+
+    # Now that target_week is known, build the active-rebate map: for each
+    # parent SKU with a rebate event covering target_week, take the highest
+    # aporte_unitario (defensive: a parent with overlapping events keeps the
+    # most-favorable rebate).
+    if rebates_all is not None:
+        active = rebates_all[
+            (rebates_all["fecha_inicio"] <= target_week) &
+            (rebates_all["fecha_termino"] >= target_week)
+        ]
+        if len(active) > 0:
+            rebate_map = (
+                active.groupby("parent_sku")["aporte_unitario"]
+                .max()
+                .astype(float)
+                .to_dict()
+            )
+            print(f"  Active rebates: {len(rebate_map)} parents covered "
+                  f"(max aporte: {max(rebate_map.values()):,.0f} CLP/unit)")
 
     # Get current week data
     week_data = features[features["week"] == target_week].copy()
@@ -548,7 +590,12 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         # Stock + cost info
         _stock = int(row["stock_on_hand"]) if pd.notna(row.get("stock_on_hand")) else None
         _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
-        unit_cost = _get_cost(row["codigo_padre"])
+        # unit_cost is the EFFECTIVE cost net of any active supplier rebate —
+        # this is what the floor and margin math should use, since a rebate
+        # genuinely lowers the brand's economic cost during the event.
+        raw_cost = _get_cost(row["codigo_padre"])
+        unit_cost = _effective_cost(row["codigo_padre"])
+        rebate_amount = rebate_map.get(row["codigo_padre"], 0)
 
         # Margin calculations (strip IVA 19% — prices include tax, costs are net)
         if unit_cost:
@@ -590,6 +637,8 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "expected_weekly_rev": int(expected_weekly_rev),
             "rev_delta": int(expected_weekly_rev - current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
             "unit_cost": int(unit_cost) if unit_cost else None,
+            "raw_cost": int(raw_cost) if raw_cost else None,
+            "rebate_amount": int(rebate_amount) if rebate_amount else 0,
             "margin_pct": rec_margin_pct,
             "margin_delta": margin_delta,
             "urgency": "INCREASE",
@@ -659,7 +708,10 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         # Stock + cost info
         _stock = int(row["stock_on_hand"]) if pd.notna(row.get("stock_on_hand")) else None
         _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
-        unit_cost = _get_cost(parent)
+        # unit_cost is the EFFECTIVE cost net of any active supplier rebate.
+        raw_cost = _get_cost(parent)
+        unit_cost = _effective_cost(parent)
+        rebate_amount = rebate_map.get(parent, 0)
 
         # Margin calculations
         if unit_cost:
@@ -751,6 +803,8 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "expected_weekly_rev": int(expected_weekly_rev),
             "rev_delta": int(expected_weekly_rev - current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
             "unit_cost": int(unit_cost) if unit_cost else None,
+            "raw_cost": int(raw_cost) if raw_cost else None,
+            "rebate_amount": int(rebate_amount) if rebate_amount else 0,
             "margin_pct": rec_margin_pct,
             "margin_delta": margin_delta,
             "urgency": urgency,

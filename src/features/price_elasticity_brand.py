@@ -121,16 +121,14 @@ def prepare_elasticity_data(brand: str):
     # Flag normal-price weeks using YNK's curated reference price
     # (auxiliar.precio_normal). Markdown weeks have an additional event-driven
     # demand boost on top of the price-elasticity response — including them
-    # inflates elasticity estimates. By tagging them we can let
-    # estimate_elasticity_sku exclude them from the regression.
+    # inflates elasticity estimates.
     pn_path = raw / "precio_normal.parquet"
     if pn_path.exists():
         pn_df = pd.read_parquet(pn_path)[["sku", "precio_normal"]].rename(
             columns={"sku": "codigo_padre"}
         )
         weekly = weekly.merge(pn_df, on="codigo_padre", how="left")
-        # Within 5% of reference = normal-price week. SKUs without coverage
-        # in precio_normal default to normal=True (no filtering applied).
+        # Within 5% of reference = normal-price week.
         weekly["is_normal_price"] = np.where(
             weekly["precio_normal"].notna() & (weekly["precio_normal"] > 0),
             weekly["avg_price"] >= weekly["precio_normal"] * 0.95,
@@ -142,6 +140,19 @@ def prepare_elasticity_data(brand: str):
               f"normal-price weeks: {n_normal:,} ({100*n_normal/max(n_total,1):.0f}%)")
     else:
         weekly["is_normal_price"] = True
+
+    # Multi-tier markdown indicators — bucketed discount depth so the
+    # regression can identify β separately from each tier's event boost.
+    # Binary is_markdown was perfectly collinear with ln_price; with tiered
+    # dummies, within-tier price variation (across stores, across re-runs of
+    # the same tier) lets β be identified from genuine price changes while
+    # tier dummies absorb the per-tier advertising/event effect.
+    # Tier boundaries match the operational discount ladder (15/20/30/40%).
+    weekly["md_tier_15"] = ((weekly["discount_depth"] >= 0.07) & (weekly["discount_depth"] < 0.175)).astype(int)
+    weekly["md_tier_20"] = ((weekly["discount_depth"] >= 0.175) & (weekly["discount_depth"] < 0.25)).astype(int)
+    weekly["md_tier_30"] = ((weekly["discount_depth"] >= 0.25) & (weekly["discount_depth"] < 0.35)).astype(int)
+    weekly["md_tier_40"] = (weekly["discount_depth"] >= 0.35).astype(int)
+    # Tier 0 (full price / negligible discount) is the omitted baseline.
 
     return weekly
 
@@ -155,23 +166,28 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
     Uses numpy arrays and np.linalg.lstsq directly (avoids pd.get_dummies
     and sklearn overhead per iteration — critical for 6K+ parent SKUs).
 
-    Markdown handling (DEFAULT OFF after 2026-04-25 retro):
+    Markdown handling (DEFAULT OFF):
     - markdown_dummy=False (default): naive log-log fit on all data. Markdown
       contamination biases |β| upward but estimates stay directionally
-      negative and informative — this is the original behavior from before
-      the elasticity-cleanup attempt.
-    - markdown_dummy=True: adds is_markdown to the feature matrix to absorb
-      the markdown event boost. Sounds principled but in real data ln_price
-      and is_markdown are near-perfect substitutes (markdown weeks ALWAYS
-      have lower prices since precio_normal only flags binary markdown vs
-      not, with no within-markdown price labelling). HOKA test run produced
-      median 0.0 with 50% POSITIVE elasticity and a min of −1294 — classic
-      OLS collinearity blow-up. Keep the param for future experimentation
-      with multi-tier markdown labels (e.g., 15%/20%/30%/40% indicators)
-      that DO have within-markdown variation.
+      negative and informative.
+    - markdown_dummy=True: prefers multi-tier dummies (md_tier_15/20/30/40,
+      added in prepare_elasticity_data) over the binary is_markdown flag.
+      Multi-tier dummies have within-tier price variation, breaking the
+      collinearity that killed the binary version. Falls through to the
+      binary dummy if multi-tier columns aren't present, then to no dummy
+      at all if neither is.
+
+    The binary version (precio_normal alone) is collinear with ln_price by
+    construction — a markdown week ALWAYS has a lower price. With multi-tier
+    indicators, prices vary WITHIN each tier (cross-store, cross-time within
+    the same tier), so β identifies from genuine price moves and γ_tier
+    absorbs the discrete event boost.
     """
     results = []
-    use_markdown_dummy = markdown_dummy and "is_normal_price" in data.columns
+    tier_cols = [c for c in ("md_tier_15", "md_tier_20", "md_tier_30", "md_tier_40")
+                 if c in data.columns]
+    has_multi_tier = markdown_dummy and len(tier_cols) > 0
+    use_binary_dummy = markdown_dummy and not has_multi_tier and "is_normal_price" in data.columns
 
     # Pre-compute global month codes for one-hot encoding
     unique_months = np.sort(data["month"].unique())
@@ -192,11 +208,17 @@ def estimate_elasticity_sku(data, min_price_variation=0.05, min_observations=10,
         # Build feature matrix with numpy (no pd.get_dummies / pd.concat)
         features = [group["ln_price"].values.reshape(-1, 1)]
 
-        # Markdown dummy: 1 = price < precio_normal × 0.95 (markdown event).
-        # Only added when both states are present in the group — otherwise
-        # the column is constant and would be perfectly collinear with the
-        # intercept.
-        if use_markdown_dummy:
+        # Markdown dummies — multi-tier preferred (breaks ln_price collinearity).
+        # For each tier present in this SKU's data with non-trivial variation
+        # (not all 0, not all 1), add it as a dummy. The omitted baseline is
+        # tier 0 (full price). β on ln_price now reflects within-tier price
+        # variation; tier coefs absorb per-tier event boosts.
+        if has_multi_tier:
+            for col in tier_cols:
+                arr = group[col].values.astype(np.float64)
+                if 0 < arr.sum() < n:
+                    features.append(arr.reshape(-1, 1))
+        elif use_binary_dummy:
             is_markdown_arr = (~group["is_normal_price"].astype(bool)).values.astype(np.float64)
             if 0 < is_markdown_arr.sum() < n:
                 features.append(is_markdown_arr.reshape(-1, 1))
