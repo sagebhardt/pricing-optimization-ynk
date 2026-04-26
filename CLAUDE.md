@@ -146,10 +146,21 @@ DB (PostgreSQL) → extract → parquet (local)
 
 ## Step Order (Important)
 ```
-extract → scrape_competitors → elasticity → features → lifecycle → size_curve → enhance → aggregate → cross_store → train → pricing → competitive_intel → outcome → sync
+extract → scrape_competitors → elasticity → features → lifecycle → size_curve → enhance → aggregate → cross_store → train → pricing → channel_aggregate → competitive_intel → outcome → sync
 ```
 Elasticity MUST run before features because `add_margin_targets` reads elasticity data from disk to estimate velocity at different discount levels. On fresh containers, running features first produces low-variance targets (everything clusters at 30-35% discount).
+`channel_aggregate` MUST run after pricing — it reads `weekly_actions/{brand}/pricing_actions_{week}.csv` and rolls per-store recommendations into per-channel actions. No-ops for brands not in `CHANNEL_GRAIN_BRANDS` (HOKA/OAKLEY).
 Competitive intel MUST run after pricing because it reads pricing actions + elasticity to generate opportunities/threats with dollar impact estimates.
+
+## Channel Grain Architecture
+Pricing decisions originally lived at parent SKU × store. For multi-store brands the action volume overwhelmed BMs (BELSPORT had ~60K weekly rows), so we collapsed the primary decision grain to **parent SKU × channel** (B&M vs Ecomm). Per-store stays available as an escape-hatch override.
+
+- `CHANNEL_GRAIN_BRANDS = {"BOLD","BAMERS","BELSPORT"}` in `config/database.py`. HOKA (3 stores) / OAKLEY (8 stores) stay per-store — too few stores for the collapse to help.
+- Pipeline: `src/models/channel_pricing_brand.py` → `weekly_actions_channel/{brand}/pricing_actions_channel_{week}.csv`. Re-runs the same 9-step profit simulation (`src/models/pricing_simulation.find_profit_maximizing_step`) on channel-aggregated velocity / stock / weighted cost. Includes a classifier gate (only emit if at least one store had a per-store recommendation) and a `mandatory_review` flag when intra-channel `per_store_variance_pct > 0.50`.
+- API: `grain=channel|store` query param on `/pricing-actions`, `/decisions`, `/decisions/plan`, `/decisions/planner-queue`, `/export/price-changes`, `/estimate-impact`. New `/channel-stats/{brand}` returns the gap-stats JSON (chain_uniform_profit vs sum_per_store_profit).
+- Decision keys: `{parent_sku}-{bm|ecomm}` at channel grain, `{parent_sku}-{store}` at store grain. Stored in separate files (`decisions_channel_{week}.json` vs `decisions_{week}.json`) so chain-channel and per-store overrides coexist cleanly.
+- Dashboard: `ChannelListaView.jsx` is the primary list at channel grain (default for supported brands). Cross-store alerts (override entry point) elevate to the top with a collapsible header. Channel rows show a green "rebate $X" badge when `rebate_amount > 0`.
+- Validation: typical `gap_pct` near 0 across $89-165M weekly profit aggregates — the uniform-price constraint costs <1% on the totals. Compression: BOLD 1,705→486 (3.5×), BAMERS 688→90 (7.6×), BELSPORT 3,683→640 (5.8×).
 
 ## Training Mode
 All brands use margin-optimized training:
@@ -177,9 +188,11 @@ PostgreSQL `dwh` database, 13 schemas. Primary source is `sap_s4`. Other populat
 
 Empty (provisioned but no data yet): `google`, `pos`, `public`, `reports`, `salesforce`, `sap_ewm`, `wholesale`, `woocommerce`.
 
+Integrated (data flowing through pipeline):
+- `auxiliar.precio_normal` — reference price per parent SKU. Extracted to `data/raw/{brand}/precio_normal.parquet`, joined into the elasticity panel as `is_normal_price`. Used by the optional `markdown_dummy` regression path (default OFF — see Known Issues).
+- `auxiliar.rebates` — supplier rebate contributions during markdown events. Extracted to `data/raw/{brand}/rebates.parquet` (synced to GCS), used by `weekly_pricing_brand`'s `_cost_trio` to compute effective cost. The cost floor + margin math run on `unit_cost = raw_cost − rebate_amount`, so rebate-funded events allow legitimately deeper markdowns. Action rows carry `raw_cost` / `rebate_amount` / `unit_cost` (math ties exactly: `raw - rebate == unit`, with floor at 0). Channel rows show a green "rebate $X" badge when `rebate_amount > 0`.
+
 Untapped tables that would meaningfully improve the model (not yet integrated):
-- `auxiliar.precio_normal` — reference price per parent SKU. Currently extracted to `data/raw/{brand}/precio_normal.parquet` and used to flag markdown weeks (`is_normal_price` on the elasticity panel). Both filter-out and binary-dummy elasticity cleanup attempts (2026-04-25) failed empirically: a binary markdown flag is collinear with `ln_price` (markdown weeks always have lower prices), so OLS blows up. To actually clean elasticity we need multi-tier markdown labels (e.g., 15%/20%/30%/40% indicators) that have within-markdown price variation. Infra is in place (`markdown_dummy` parameter on `estimate_elasticity_sku`, default OFF) — ready to test with richer labels once available.
-- `auxiliar.rebates` — supplier rebate contributions during markdown events. True margin = cost − rebate; current floor calculations are conservative.
 - `auxiliar.flujo_tiendas` — hourly foot traffic (we use weekly_entries, much coarser).
 - `auxiliar.producto_atributos_custom_join` — YNK merchandising tags (ranking, lifecycle, collection).
 - `marketplace.fala_*` / `meli_*` — direct marketplace data; could replace the brittle competitor scraping for Falabella + ML.
