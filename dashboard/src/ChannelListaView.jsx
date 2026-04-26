@@ -36,7 +36,11 @@ function ChannelRow({ action, status, onDecide, onManual, canApprove }) {
     : mp >= 40 ? 'ch-margin--strong'
     : 'ch-margin--ok'
   const urg = String(action.urgency || 'LOW').toUpperCase()
-  const urgCls = action.action_type === 'increase' ? 'ch-urg--increase'
+  // Source-of-truth is action_type — when the row is a markdown, ignore any
+  // stale "INCREASE" that might have leaked through legacy urgency aggregation
+  // (older CSVs from before the urgency-alignment fix).
+  const isIncreaseRow = action.action_type === 'increase'
+  const urgCls = isIncreaseRow ? 'ch-urg--increase'
     : urg === 'HIGH' ? 'ch-urg--high'
     : urg === 'MEDIUM' ? 'ch-urg--medium'
     : 'ch-urg--low'
@@ -85,7 +89,7 @@ function ChannelRow({ action, status, onDecide, onManual, canApprove }) {
 
       <div>
         <span className={`ch-urg ${urgCls}`}>
-          {urg === 'INCREASE' || action.action_type === 'increase' ? 'Subir' : urg}
+          {isIncreaseRow ? 'Subir' : (urg === 'INCREASE' ? 'Med' : urg)}
         </span>
       </div>
 

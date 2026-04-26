@@ -472,11 +472,17 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
             except (TypeError, ValueError):
                 rebate_amount_channel = 0
         if channel_store_actions:
-            severity = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "INCREASE": 2}
-            urgency = max(
-                (a.get("urgency", "LOW") for a in channel_store_actions),
-                key=lambda u: severity.get(str(u), 0),
-            )
+            # Urgency must align with the channel-level action_type: when the
+            # channel chose a markdown, INCREASE is irrelevant noise from
+            # individual stores that happened to want a price raise. Filter
+            # accordingly so the badge text + section assignment stay consistent.
+            if action_type == "increase":
+                urgency = "INCREASE"
+            else:
+                severity = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+                relevant = [a.get("urgency", "LOW") for a in channel_store_actions
+                            if a.get("urgency") != "INCREASE"]
+                urgency = max(relevant, key=lambda u: severity.get(str(u), 0)) if relevant else "MEDIUM"
             reason_counter = Counter()
             for a in channel_store_actions:
                 raw = str(a.get("reasons", ""))

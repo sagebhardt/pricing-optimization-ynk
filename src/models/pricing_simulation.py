@@ -219,21 +219,23 @@ def find_profit_maximizing_step(
     candidates.sort(key=lambda c: (-c["weekly_profit"], c["step"], -c["expected_velocity"]))
     best = candidates[0]
 
-    # Classify action type FIRST from step direction; demote to "hold"
-    # only if the chosen price is also immaterially close to current.
+    # Classify action type from PRICE DIRECTION (chosen vs current), not from
+    # step direction. At channel grain the velocity-weighted current_price and
+    # the step-derived chosen_price use different bases — a "deeper step"
+    # (higher discount %) does NOT always produce a lower price than the
+    # weighted-average current. Deriving from price direction guarantees the
+    # action_type matches what the BM sees: price up = increase, down = decrease.
     current_step_snapped = snap_to_discount_step(current_discount)
-    if best["step"] > current_discount + 1e-9:
-        action_type = "decrease"
-    elif best["step"] < current_discount - 1e-9:
-        action_type = "increase"
-    else:
+    price_diff = best["price"] - current_price_rounded
+    if abs(price_diff) < min_price_delta and best["step"] == current_step_snapped:
         action_type = "hold"
-
-    # If the step is unchanged AND the price barely moves, the sim is
-    # explicitly saying "hold." Return with action_type="hold" so callers
-    # can distinguish this from the "no feasible step" path (where we
-    # returned None above). Callers MUST skip hold rows.
-    if best["step"] == current_step_snapped and abs(best["price"] - current_price_rounded) < min_price_delta:
+    elif price_diff > 0:
+        action_type = "increase"
+    elif price_diff < 0:
+        action_type = "decrease"
+    else:
+        # Same price but different step (anchor-snap tie) — call it hold to
+        # avoid emitting a no-op recommendation.
         action_type = "hold"
 
     return {
