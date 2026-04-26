@@ -682,11 +682,14 @@ def extract_brand(brand_name: str):
     # step to relax the cost floor when a rebate event covers the markdown.
     rb_df = _extract_rebates_from_dw(brand_name)
     if rb_df is not None and len(rb_df) > 0:
+        # Postgres `date` columns come back as Python datetime.date; coerce to
+        # pandas datetime so downstream consumers (pricing) can do range
+        # comparisons against pd.Timestamp without TypeErrors.
+        rb_df["fecha_inicio"] = pd.to_datetime(rb_df["fecha_inicio"])
+        rb_df["fecha_termino"] = pd.to_datetime(rb_df["fecha_termino"])
         rb_df.to_parquet(raw_dir / "rebates.parquet", index=False)
-        active = (
-            (rb_df["fecha_inicio"] <= pd.Timestamp.today().normalize()) &
-            (rb_df["fecha_termino"] >= pd.Timestamp.today().normalize())
-        ).sum()
+        today = pd.Timestamp.today().normalize()
+        active = ((rb_df["fecha_inicio"] <= today) & (rb_df["fecha_termino"] >= today)).sum()
         n_parents = rb_df["parent_sku"].nunique()
         print(f"  Generated rebates.parquet: {len(rb_df):,} events covering "
               f"{n_parents:,} parents ({active:,} active today)")
