@@ -1023,6 +1023,14 @@ body { font-family: var(--font-body); background: var(--slate-100); color: var(-
   padding: 1px 6px; border-radius: 3px;
   font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
 }
+.ch-meta__rebate {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: var(--green-700); background: var(--green-50);
+  border: 1px solid #bbf7d0;
+  padding: 1px 6px; border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: 600;
+}
 
 /* Channel badges — B&M quiet, ECOMM the distinctive blue accent */
 .ch-badge {

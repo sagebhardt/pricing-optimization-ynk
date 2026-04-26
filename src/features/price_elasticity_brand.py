@@ -378,8 +378,16 @@ def run_elasticity_for_brand(brand: str):
     data = prepare_elasticity_data(brand)
     print(f"  {len(data):,} weekly SKU-store observations")
 
+    # Env-var override: ELASTICITY_MARKDOWN_DUMMY=true enables the multi-tier
+    # markdown-dummy regression for research/validation runs without code
+    # changes. Default OFF (production keeps the naive log-log fit until
+    # multi-tier is empirically validated against a baseline).
+    md_flag = os.getenv("ELASTICITY_MARKDOWN_DUMMY", "").lower() in ("1", "true", "yes")
+    if md_flag:
+        print(f"[{brand}] ELASTICITY_MARKDOWN_DUMMY=true — using multi-tier markdown dummies")
+
     print(f"\n[{brand}] Estimating SKU-level elasticity...")
-    sku_elast = estimate_elasticity_sku(data)
+    sku_elast = estimate_elasticity_sku(data, markdown_dummy=md_flag)
     sku_elast.to_parquet(processed / "elasticity_by_sku.parquet", index=False)
 
     if len(sku_elast) > 0:

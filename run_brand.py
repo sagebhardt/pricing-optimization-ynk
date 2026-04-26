@@ -84,6 +84,12 @@ def sync_to_gcs(brand: str):
     if products_path.exists():
         _upload(products_path, f"data/raw/{brand_lower}/products.parquet")
 
+    # 1c. Supplier rebates — needed by the API to surface a "rebate-funded"
+    # badge on channel rows when an active rebate window covers the SKU.
+    rebates_path = PROJECT_ROOT / "data" / "raw" / brand_lower / "rebates.parquet"
+    if rebates_path.exists():
+        _upload(rebates_path, f"data/raw/{brand_lower}/rebates.parquet")
+
     # 2. Size curve alerts
     alerts_path = PROJECT_ROOT / "data" / "processed" / brand_lower / "size_curve_alerts.parquet"
     if alerts_path.exists():

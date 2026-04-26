@@ -61,6 +61,11 @@ function ChannelRow({ action, status, onDecide, onManual, canApprove }) {
               <AlertTriangle size={10} /> revisar por tienda
             </span>
           )}
+          {Number(action.rebate_amount) > 0 && (
+            <span className="ch-meta__rebate" title={`Aporte proveedor: ${clp(action.rebate_amount)}/unidad — el costo efectivo es menor durante el evento`}>
+              rebate {clpCompact(action.rebate_amount)}
+            </span>
+          )}
           {action.aggregation_method === 'velocity_weighted_fallback' && (
             <span className="ch-meta__fallback" title="Sin datos de stock — promedio ponderado por velocidad">fallback</span>
           )}

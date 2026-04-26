@@ -459,6 +459,18 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
             for s in grp["centro"].unique()
             if (str(parent), str(s)) in store_action_map
         ]
+        # Rebate aggregation: max across stores (rebate is parent-level so all
+        # stores see the same amount, but max is defensive against ragged data).
+        # Action rows already carry raw_cost / rebate_amount per store; pull max.
+        rebate_amount_channel = 0
+        if channel_store_actions:
+            try:
+                rebate_amount_channel = int(max(
+                    (float(a.get("rebate_amount", 0) or 0) for a in channel_store_actions),
+                    default=0,
+                ))
+            except (TypeError, ValueError):
+                rebate_amount_channel = 0
         if channel_store_actions:
             severity = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "INCREASE": 2}
             urgency = max(
@@ -532,6 +544,7 @@ def generate_channel_actions_for_brand(brand: str, target_week=None):
             "expected_weekly_rev": int(expected_weekly_rev),
             "rev_delta": int(rev_delta),
             "unit_cost": int(unit_cost) if unit_cost is not None else None,
+            "rebate_amount": rebate_amount_channel,
             "margin_pct": margin_pct_val,
             "margin_delta": margin_delta,
             "urgency": urgency,

@@ -343,13 +343,26 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
     else:
         rebates_all = None
 
-    def _effective_cost(sku):
-        """Cost net of any active supplier rebate. Falls through to raw cost."""
+    def _cost_trio(sku):
+        """Return (raw_cost, rebate_amount, unit_cost) all as int by construction:
+        raw_cost − rebate_amount === unit_cost (no ±1 rounding drift).
+
+        Replaces the prior pattern of independently casting each of raw cost,
+        rebate, and effective cost — those casts could disagree by 1 CLP when
+        the underlying floats had different fractional parts. Now we round
+        the inputs once and derive unit_cost from the rounded ints, so the
+        displayed trio always ties.
+
+        Returns (None, 0, None) when there's no cost lookup at all.
+        """
         c = _get_cost(sku)
         if c is None:
-            return None
+            return (None, 0, None)
         rebate = rebate_map.get(sku, 0)
-        return max(c - rebate, 0)
+        raw_int = int(round(c))
+        rebate_int = int(round(rebate))
+        unit_int = max(raw_int - rebate_int, 0)
+        return (raw_int, rebate_int, unit_int)
 
     # Determine target week — use most recent week with sufficient data
     if target_week is None:
@@ -593,9 +606,8 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         # unit_cost is the EFFECTIVE cost net of any active supplier rebate —
         # this is what the floor and margin math should use, since a rebate
         # genuinely lowers the brand's economic cost during the event.
-        raw_cost = _get_cost(row["codigo_padre"])
-        unit_cost = _effective_cost(row["codigo_padre"])
-        rebate_amount = rebate_map.get(row["codigo_padre"], 0)
+        # Trio is rounded together so raw - rebate === unit on the action row.
+        raw_cost, rebate_amount, unit_cost = _cost_trio(row["codigo_padre"])
 
         # Margin calculations (strip IVA 19% — prices include tax, costs are net)
         if unit_cost:
@@ -636,9 +648,9 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "current_weekly_rev": int(current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
             "expected_weekly_rev": int(expected_weekly_rev),
             "rev_delta": int(expected_weekly_rev - current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
-            "unit_cost": int(unit_cost) if unit_cost else None,
-            "raw_cost": int(raw_cost) if raw_cost else None,
-            "rebate_amount": int(rebate_amount) if rebate_amount else 0,
+            "unit_cost": unit_cost,  # already int (or None) from _cost_trio
+            "raw_cost": raw_cost,
+            "rebate_amount": rebate_amount,
             "margin_pct": rec_margin_pct,
             "margin_delta": margin_delta,
             "urgency": "INCREASE",
@@ -709,9 +721,7 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
         _stock = int(row["stock_on_hand"]) if pd.notna(row.get("stock_on_hand")) else None
         _woc = round(row["weeks_of_cover"], 1) if pd.notna(row.get("weeks_of_cover")) else None
         # unit_cost is the EFFECTIVE cost net of any active supplier rebate.
-        raw_cost = _get_cost(parent)
-        unit_cost = _effective_cost(parent)
-        rebate_amount = rebate_map.get(parent, 0)
+        raw_cost, rebate_amount, unit_cost = _cost_trio(parent)
 
         # Margin calculations
         if unit_cost:
@@ -802,9 +812,9 @@ def generate_weekly_actions_for_brand(brand: str, target_week=None):
             "current_weekly_rev": int(current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
             "expected_weekly_rev": int(expected_weekly_rev),
             "rev_delta": int(expected_weekly_rev - current_weekly_rev) if pd.notna(current_weekly_rev) else 0,
-            "unit_cost": int(unit_cost) if unit_cost else None,
-            "raw_cost": int(raw_cost) if raw_cost else None,
-            "rebate_amount": int(rebate_amount) if rebate_amount else 0,
+            "unit_cost": unit_cost,  # already int (or None) from _cost_trio
+            "raw_cost": raw_cost,
+            "rebate_amount": rebate_amount,
             "margin_pct": rec_margin_pct,
             "margin_delta": margin_delta,
             "urgency": urgency,
