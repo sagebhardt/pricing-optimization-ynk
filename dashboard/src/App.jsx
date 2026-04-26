@@ -582,6 +582,10 @@ function App() {
   // escape hatch, not the primary. Brands not in CHANNEL_GRAIN_BRANDS are
   // always forced to 'store' (see loadBrand).
   const [grain, setGrain] = useState('channel')
+  // Cross-store alerts at channel grain take a lot of vertical space (often
+  // 50+ rows). Default collapsed so the action list is the first thing the
+  // BM sees; user expands when they want to drill into overrides.
+  const [crossStoreCollapsed, setCrossStoreCollapsed] = useState(true)
 
   // Brands visible to this user
   const visibleBrands = useMemo(() => {
@@ -1712,53 +1716,67 @@ function App() {
 
       {grain === 'channel' && crossStoreAlerts.length > 0 && (
         <section className="section section--cross-store section--cross-store-elevated">
-          <div className="section-header">
+          <button
+            className="section-header section-header--clickable"
+            onClick={() => setCrossStoreCollapsed(c => !c)}
+            title={crossStoreCollapsed ? 'Mostrar inconsistencias' : 'Ocultar inconsistencias'}
+          >
             <AlertTriangle size={16} />
-            <h2>Inconsistencias entre tiendas — candidatos a override ({crossStoreAlerts.length})</h2>
-          </div>
-          <div className="alert-grid">
-            {crossStoreAlerts.slice(0, 20).map((a, i) => (
-              <div key={i} className="alert-card alert-card--cross-store">
-                <div className="alert-sku">{a.parent_sku}</div>
-                <div className="alert-spread">{(a.price_spread * 100).toFixed(0)}% spread</div>
-                <div className="alert-stores">
-                  {a.stores.map((s, j) => (
-                    <button
-                      key={j}
-                      className={`cs-store cs-store--btn ${s.channel}`}
-                      onClick={() => {
-                        // Find the per-store action row to open in the manual modal —
-                        // override goes to the per-store decisions namespace.
-                        const storeAction = {
-                          parent_sku: a.parent_sku,
-                          store: s.store,
-                          store_name: s.store,
-                          product: a.parent_sku,
-                          current_list_price: s.price,
-                          current_price: s.price,
-                          current_velocity: 1,
-                          recommended_price: a.sync_price || s.price,
-                        }
-                        // Override = per-store grain, regardless of current view grain
-                        if (grain === 'channel') toggleGrain('store')
-                        setManualAction(storeAction)
-                      }}
-                      title="Click para override de esta tienda"
-                    >
-                      {s.store}: ${s.price?.toLocaleString()}
-                      {s.discount_rate > 0.05 ? ` (-${(s.discount_rate * 100).toFixed(0)}%)` : ''}
-                    </button>
-                  ))}
+            <h2>
+              Inconsistencias entre tiendas — candidatos a override ({crossStoreAlerts.length})
+            </h2>
+            {crossStoreCollapsed
+              ? <ChevronDown size={14} />
+              : <ChevronUp size={14} />}
+          </button>
+          {!crossStoreCollapsed && (
+            <div className="alert-grid">
+              {crossStoreAlerts.slice(0, 20).map((a, i) => (
+                <div key={i} className="alert-card alert-card--cross-store">
+                  <div className="alert-card-hd">
+                    <div className="alert-sku">{a.parent_sku}</div>
+                    {a.product && <div className="alert-product">{a.product}</div>}
+                  </div>
+                  <div className="alert-spread">{(a.price_spread * 100).toFixed(0)}% spread</div>
+                  <div className="alert-stores">
+                    {a.stores.map((s, j) => (
+                      <button
+                        key={j}
+                        className={`cs-store cs-store--btn ${s.channel}`}
+                        onClick={() => {
+                          const storeAction = {
+                            parent_sku: a.parent_sku,
+                            store: s.store,
+                            store_name: s.store_name || s.store,
+                            product: a.product || a.parent_sku,
+                            current_list_price: s.price,
+                            current_price: s.price,
+                            current_velocity: 1,
+                            recommended_price: a.sync_price || s.price,
+                          }
+                          if (grain === 'channel') toggleGrain('store')
+                          setManualAction(storeAction)
+                        }}
+                        title={`Override ${s.store_name || s.store}`}
+                      >
+                        <span className="cs-store__name">{s.store_name || s.store}</span>
+                        <span className="cs-store__price">${s.price?.toLocaleString()}</span>
+                        {s.discount_rate > 0.05 && (
+                          <span className="cs-store__disc">-{(s.discount_rate * 100).toFixed(0)}%</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {a.sync_price && <div className="alert-sync">Sync: ${a.sync_price.toLocaleString()}</div>}
+                  <div className="alert-reasons-list">
+                    {a.alert_reasons.split(';').filter(Boolean).map((r, j) => (
+                      <span key={j} className="reason-badge">{r.replace(/_/g, ' ')}</span>
+                    ))}
+                  </div>
                 </div>
-                {a.sync_price && <div className="alert-sync">Sync: ${a.sync_price.toLocaleString()}</div>}
-                <div className="alert-reasons-list">
-                  {a.alert_reasons.split(';').filter(Boolean).map((r, j) => (
-                    <span key={j} className="reason-badge">{r.replace(/_/g, ' ')}</span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
 

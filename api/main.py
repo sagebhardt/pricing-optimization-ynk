@@ -210,7 +210,9 @@ def get_size_alerts(brand: Optional[str] = Query(None), min_attrition: float = Q
 
 @app.get("/alerts/cross-store")
 def get_cross_store_alerts(brand: Optional[str] = Query(None), min_price_spread: float = Query(0.0)):
-    """Get cross-store pricing consistency alerts."""
+    """Get cross-store pricing consistency alerts, enriched with product
+    and store names looked up from the per-store pricing_actions CSV
+    (which carries both `product` and `store_name` columns)."""
     from api import storage
     alerts = storage.load_cross_store_alerts(brand)
     if len(alerts) == 0:
@@ -220,14 +222,30 @@ def get_cross_store_alerts(brand: Optional[str] = Query(None), min_price_spread:
     if min_price_spread > 0:
         latest = latest[latest["price_spread"] >= min_price_spread]
 
+    # Build name lookups from per-store actions (always store-grain — that's
+    # the only CSV with both store_name and product fields).
+    product_by_sku = {}
+    store_name_by_code = {}
+    if brand:
+        ad = storage.load_pricing_actions(brand)
+        for it in ad.get("items", []):
+            sku = str(it.get("parent_sku", ""))
+            store = str(it.get("store", ""))
+            if sku and "product" in it and sku not in product_by_sku:
+                product_by_sku[sku] = it.get("product", "")
+            if store and "store_name" in it and store not in store_name_by_code:
+                store_name_by_code[store] = it.get("store_name", store)
+
     # Group by parent SKU with nested stores
     items = []
     for parent, group in latest.groupby("codigo_padre"):
         first = group.iloc[0]
         stores = []
         for _, row in group.iterrows():
+            store_code = str(row["centro"])
             store = {
-                "store": row["centro"],
+                "store": store_code,
+                "store_name": store_name_by_code.get(store_code, store_code),
                 "channel": row.get("channel", "bm"),
                 "price": int(row["avg_precio_final"]) if pd.notna(row.get("avg_precio_final")) else None,
                 "discount_rate": round(row["discount_rate"], 3) if pd.notna(row.get("discount_rate")) else None,
@@ -240,6 +258,7 @@ def get_cross_store_alerts(brand: Optional[str] = Query(None), min_price_spread:
 
         items.append({
             "parent_sku": parent,
+            "product": product_by_sku.get(str(parent), ""),
             "brand": first.get("brand", ""),
             "n_stores": int(first["n_stores"]),
             "price_spread": round(first["price_spread"], 3),
