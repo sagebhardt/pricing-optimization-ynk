@@ -93,7 +93,7 @@ API (Cloud Run, slim image ~50MB):
 
 ## Cloud Infrastructure
 - **Cloud Run Service**: `pricing-api` (1 GiB, 1 CPU, min-instances=0)
-- **Cloud Run Job**: `pricing-pipeline` (16 GiB, 8 CPU, 2hr timeout)
+- **Cloud Run Job**: `pricing-pipeline` (16 GiB, 8 CPU, 4hr timeout — bumped 2026-04-25 after a 5-brand sequential run hit the prior 2hr ceiling)
 - **Cloud Run Job**: `competitor-scrape` (4 GiB, 2 CPU, 30min timeout) — mid-week scraping + intelligence
 - **Cloud Scheduler**: `pricing-pipeline-weekly` (Monday 09:00 UTC / 6am CLT)
 - **Cloud Scheduler**: `competitor-scrape-midweek` (Wednesday 09:00 CLT) — competitor scraping + intelligence brief
@@ -375,7 +375,7 @@ Each brand runs as a subprocess (memory fully reclaimed between brands). Stock e
 - C&C columns (`click_collect_units`, `instore_units`, `instore_velocity_4w`, `click_collect_ratio`) excluded from model training (in `EXCLUDE_COLS` in both `train_brand.py` and `weekly_pricing_brand.py`)
 
 ## Known Issues
-- Elasticity estimates conflated with markdown effects — production keeps the original "include all data, accept upward bias" methodology. The 2026-04-25 cleanup experiment (filter-out, then binary dummy) failed because `auxiliar.precio_normal` only labels markdown vs not without depth granularity, so `ln_price` is collinear with `is_markdown` and OLS produces unstable coefficients (HOKA went to median 0 with 50% positive; BOLD min −1294, max +21). Real fix needs multi-tier discount-depth labels (15/20/30/40% indicators) that have within-markdown price variation. The `markdown_dummy` parameter on `estimate_elasticity_sku` stays in code (default OFF) so we can rerun the experiment once richer labels are wired through `prepare_elasticity_data`.
+- Elasticity estimates conflated with markdown effects — production keeps the original "include all data, accept upward bias" methodology. Three cleanup attempts on 2026-04-25/26 all failed empirically and were reverted: (1) filter-out markdown weeks (starved the regression of price variation: median 0); (2) binary `is_markdown` dummy (collinear with ln_price: max +21, min −1294); (3) multi-tier `md_tier_15/20/30/40` dummies (still collinear because tier_30 has within-tier CV=0.03: max +47,181, min −106,040 on real BOLD data). The infrastructure stays (`markdown_dummy` parameter, `md_tier_*` columns, `ELASTICITY_MARKDOWN_DUMMY=true` env var) for future experimentation — likely need a fundamentally different identification strategy (cross-store same-week variation? regularization? IV?) rather than another within-SKU specification.
 - Belsport has no stock table yet (`stock_belsport` doesn't exist) — uses sales proxy for size curve
 - BELSPORT regressor R2 (CV=0.538) improved significantly but holdout (0.704) suggests more room
 - Size curve alerts filtered to latest week only (BELSPORT was generating 3.4M rows across all weeks)
