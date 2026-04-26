@@ -1762,6 +1762,10 @@ function App() {
         </section>
       )}
 
+      {showAnalytics && (
+        <AnalyticsDrawer brand={brand?.id} authFetch={authFetch} />
+      )}
+
       {grain === 'channel' ? (
         <ChannelListaView
           actions={actions}
@@ -1839,10 +1843,6 @@ function App() {
           )}
         </div>
       </div>
-
-      {showAnalytics && (
-        <AnalyticsDrawer brand={brand?.id} authFetch={authFetch} />
-      )}
 
       {totalPages > 1 && (
         <div className="pagination">
