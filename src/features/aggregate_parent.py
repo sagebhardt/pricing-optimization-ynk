@@ -343,11 +343,23 @@ def aggregate_to_parent(brand: str):
                     "total_rain", "rain_days", "temp_deviation", "is_rainy_week")]
     cat_cols = [c for c in child.columns if c.startswith("cat_x_")]
     comp_cols = [c for c in child.columns if c.startswith("comp_")]
-    passthrough_cols = weather_cols + cat_cols + comp_cols
+    mkdown_cols = [c for c in child.columns if c.startswith("mkdown_contrib_")]
+    passthrough_cols = weather_cols + cat_cols + comp_cols + mkdown_cols
     if passthrough_cols:
-        passthrough_agg = child.groupby(["codigo_padre", "centro", "week"])[passthrough_cols].first().reset_index()
-        parent = parent.merge(passthrough_agg, on=["codigo_padre", "centro", "week"], how="left")
-        print(f"  Passthrough features ({len(passthrough_cols)}): weather={len(weather_cols)}, cat={len(cat_cols)}, comp={len(comp_cols)}")
+        # mkdown_contrib_2024_clp aggregates by SUM at parent level (sum across
+        # children); the rest take .first(). Compute SKU-level cols separately.
+        non_mkdown = weather_cols + cat_cols + comp_cols
+        if non_mkdown:
+            passthrough_agg = child.groupby(["codigo_padre", "centro", "week"])[non_mkdown].first().reset_index()
+            parent = parent.merge(passthrough_agg, on=["codigo_padre", "centro", "week"], how="left")
+        if mkdown_cols:
+            # Sum the per-child contribution; take first for the binary/parent-total cols.
+            agg_spec = {}
+            for c in mkdown_cols:
+                agg_spec[c] = "sum" if c == "mkdown_contrib_2024_clp" else "first"
+            mkdown_agg = child.groupby(["codigo_padre", "centro", "week"]).agg(agg_spec).reset_index()
+            parent = parent.merge(mkdown_agg, on=["codigo_padre", "centro", "week"], how="left")
+        print(f"  Passthrough features ({len(passthrough_cols)}): weather={len(weather_cols)}, cat={len(cat_cols)}, comp={len(comp_cols)}, mkdown={len(mkdown_cols)}")
 
     # Drop helper columns
     parent.drop(columns=["sizes_in_data", "total_sizes_catalog", "sizes_active"], inplace=True, errors="ignore")

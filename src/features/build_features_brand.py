@@ -595,6 +595,59 @@ def add_product_attributes(weekly: pd.DataFrame, products: pd.DataFrame) -> pd.D
     return weekly
 
 
+def add_mkdown_contribution_features(weekly: pd.DataFrame, brand: str) -> pd.DataFrame:
+    """Join 2024 supplier-markdown-contribution per SKU as a model feature.
+
+    `ventas.contribucion_mkdown_2024_sku_x_banner` records how much the supplier
+    contributed (in CLP) to markdowns for each SKU through 2024. Two intuitions
+    motivate using it as a feature:
+      - Suppliers that funded markdowns in 2024 are likely to fund them again
+        (signal of "supplier expects this product to need markdowns").
+      - SKUs with high historic supplier contribution have a track record of
+        needing aggressive discounts to clear.
+
+    Columns added (all numeric, NaN-safe):
+      - mkdown_contrib_2024_clp: total contribution from supplier (CLP, child SKU)
+      - mkdown_contrib_2024_present: 1 if the SKU had any contribution, 0 otherwise
+      - mkdown_contrib_2024_parent_total: parent-level sum across child SKUs
+        (gives the model a brand-family signal in addition to the per-child one)
+
+    Falls through silently when the parquet doesn't exist (e.g., legacy brand
+    that never ran extraction with this step).
+    """
+    raw = _raw_dir(brand)
+    path = raw / "mkdown_contribution_2024.parquet"
+    if not path.exists():
+        weekly["mkdown_contrib_2024_clp"] = np.nan
+        weekly["mkdown_contrib_2024_present"] = 0
+        weekly["mkdown_contrib_2024_parent_total"] = np.nan
+        return weekly
+
+    mk = pd.read_parquet(path)[["sku", "contribucion_valor"]].copy()
+    mk["contribucion_valor"] = pd.to_numeric(mk["contribucion_valor"], errors="coerce").fillna(0)
+    # Same SKU may appear multiple times (different banners/months) — sum them.
+    mk = mk.groupby("sku", as_index=False)["contribucion_valor"].sum()
+    mk = mk.rename(columns={"contribucion_valor": "mkdown_contrib_2024_clp"})
+
+    weekly = weekly.merge(mk, on="sku", how="left")
+    weekly["mkdown_contrib_2024_clp"] = weekly["mkdown_contrib_2024_clp"].fillna(0)
+    weekly["mkdown_contrib_2024_present"] = (weekly["mkdown_contrib_2024_clp"] > 0).astype(int)
+
+    # Parent-level rollup — useful even when child SKU has no contribution but
+    # its parent (sister sizes/colors) did. Computed AFTER the child join so
+    # both signals are available to the model.
+    if "codigo_padre" in weekly.columns:
+        parent_total = weekly.groupby("codigo_padre")["mkdown_contrib_2024_clp"].transform("sum")
+        weekly["mkdown_contrib_2024_parent_total"] = parent_total
+    else:
+        weekly["mkdown_contrib_2024_parent_total"] = weekly["mkdown_contrib_2024_clp"]
+
+    n_with_contrib = int(weekly["mkdown_contrib_2024_present"].sum())
+    pct = 100 * n_with_contrib / max(len(weekly), 1)
+    print(f"  mkdown_contribution: {n_with_contrib:,}/{len(weekly):,} child rows ({pct:.0f}%) have non-zero supplier contribution")
+    return weekly
+
+
 def build_target_variable(weekly: pd.DataFrame) -> pd.DataFrame:
     """
     Build target variables for markdown optimization.
@@ -971,6 +1024,9 @@ def build_features_for_brand(brand: str):
 
     print(f"[{brand}] Adding product attributes...")
     weekly = add_product_attributes(weekly, products)
+
+    print(f"[{brand}] Adding markdown-contribution features...")
+    weekly = add_mkdown_contribution_features(weekly, brand)
 
     print(f"[{brand}] Building target variables...")
     weekly = build_target_variable(weekly)
